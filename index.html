@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bench &mdash; ESP32 pin monitor</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="rack">
+
+  <header class="rack__header">
+    <div class="brand">
+      <span class="brand__mark">◈</span>
+      <div>
+        <h1>Bench</h1>
+        <p class="brand__sub">Live pin monitor &amp; serial console over USB</p>
+      </div>
+    </div>
+
+    <div class="conn">
+      <span id="connDot" class="conn__dot"></span>
+      <span id="connLabel" class="conn__label">Not connected</span>
+      <select id="baudRate" class="conn__baud">
+        <option value="9600">9600</option>
+        <option value="57600">57600</option>
+        <option value="115200" selected>115200</option>
+        <option value="230400">230400</option>
+        <option value="460800">460800</option>
+      </select>
+      <button id="connectBtn" class="btn btn--primary">Connect device</button>
+      <button id="disconnectBtn" class="btn" disabled>Disconnect</button>
+    </div>
+  </header>
+
+  <p id="supportWarning" class="warning" hidden>
+    This browser doesn't support the Web Serial API. Open this page in Chrome, Edge, or another
+    Chromium-based browser to connect to a board.
+  </p>
+
+  <main class="rack__body">
+
+    <section class="panel panel--pins">
+      <div class="panel__head">
+        <h2>Pins</h2>
+        <span id="pinCount" class="panel__meta">waiting for data&hellip;</span>
+      </div>
+
+      <div class="board-wrap">
+        <div class="board">
+          <div id="boardLeft" class="board__side board__side--left"></div>
+          <div class="board__chip">
+            <span class="board__chip-label">ESP32</span>
+            <span class="board__antenna"></span>
+          </div>
+          <div id="boardRight" class="board__side board__side--right"></div>
+        </div>
+        <p class="board__note">
+          Default layout: common 38-pin ESP32 DevKit V1. Doesn't match your board's
+          printed labels? Edit <code>BOARD_LEFT</code> / <code>BOARD_RIGHT</code> in
+          <code>app.js</code> &mdash; any reported pin not listed there still shows up below.
+        </p>
+      </div>
+
+      <div class="panel__head panel__head--sub">
+        <h2>Other reported pins</h2>
+      </div>
+      <div id="pinGrid" class="pin-grid">
+        <p class="empty-state">
+          Connect a board running firmware that includes <code>pin_reporter.h</code>.
+          Any monitored pin not shown on the diagram above appears here.
+        </p>
+      </div>
+    </section>
+
+    <section class="panel panel--console">
+      <div class="panel__head">
+        <h2>Serial monitor</h2>
+        <div class="panel__actions">
+          <label class="checkbox">
+            <input type="checkbox" id="hideTelemetry">
+            Hide <code>&lt;PR&gt;</code> lines
+          </label>
+          <button id="clearConsole" class="btn btn--small">Clear</button>
+        </div>
+      </div>
+      <div id="console" class="console"></div>
+      <form id="sendForm" class="send-row">
+        <input id="sendInput" type="text" placeholder="Send a line to the board&hellip;" autocomplete="off">
+        <select id="lineEnding" class="send-row__ending">
+          <option value="\n">\n</option>
+          <option value="\r\n" selected>\r\n</option>
+          <option value="">none</option>
+        </select>
+        <button type="submit" class="btn btn--primary">Send</button>
+      </form>
+    </section>
+
+  </main>
+
+  <footer class="rack__footer">
+    <span>Protocol: firmware emits <code>&lt;PR&gt;{...}&lt;/PR&gt;</code> lines; see <code>firmware/pin_reporter.h</code>.</span>
+  </footer>
+
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
