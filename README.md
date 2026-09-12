@@ -41,7 +41,7 @@ the explanation.
 **It cannot see the value of an arbitrary pin just because your code exists
 on the chip.** USB serial is a plain byte stream — the site only ever
 receives what your firmware chooses to `Serial.print()`. Your sketch
-includes [`firmware/pin_reporter.h`](firmware/pin_reporter.h), lists the
+includes [`pin_reporter.h`](pin_reporter.h), lists the
 pins you care about, and calls one function in `loop()` that periodically
 prints a tagged line:
 
