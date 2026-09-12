@@ -3,25 +3,35 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Bench &mdash; ESP32 pin monitor</title>
+<title>Bench — ESP32 pin monitor</title>
 <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
 
 <div class="rack">
 
   <header class="rack__header">
+
     <div class="brand">
       <span class="brand__mark">◈</span>
+
       <div>
         <h1>BENCH</h1>
-        <p class="brand__sub">Live pin monitor &amp; serial console over USB</p>
+        <p class="brand__sub">
+          Live pin monitor &amp; serial console over USB
+        </p>
       </div>
     </div>
 
     <div class="conn">
+
       <span id="connDot" class="conn__dot"></span>
-      <span id="connLabel" class="conn__label">Not connected</span>
+
+      <span id="connLabel" class="conn__label">
+        Not connected
+      </span>
+
       <select id="baudRate" class="conn__baud">
         <option value="9600">9600</option>
         <option value="57600">57600</option>
@@ -29,118 +39,325 @@
         <option value="230400">230400</option>
         <option value="460800">460800</option>
       </select>
-      <button id="connectBtn" class="btn btn--primary">Connect device</button>
-      <button id="disconnectBtn" class="btn" disabled>Disconnect</button>
-      <a id="githubLink" class="btn btn--ghost" href="https://github.com/enginyears/REPLACE-WITH-REPO-NAME" target="_blank" rel="noopener">
-        <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+
+      <button id="connectBtn" class="btn btn--primary">
+        Connect device
+      </button>
+
+      <button id="disconnectBtn" class="btn" disabled>
+        Disconnect
+      </button>
+
+      <a
+        id="githubLink"
+        class="btn btn--ghost"
+        href="https://github.com/enginyears/REPLACE-WITH-REPO-NAME"
+        target="_blank"
+        rel="noopener"
+      >
+        <svg
+          width="15"
+          height="15"
+          viewBox="0 0 16 16"
+          fill="currentColor"
+        >
+          <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82 0.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/>
+        </svg>
+
         Source
       </a>
+
     </div>
+
   </header>
 
+
   <p id="supportWarning" class="warning" hidden>
-    This browser doesn't support the Web Serial API. Open this page in Chrome, Edge, or another
-    Chromium-based browser to connect to a board.
+    This browser doesn't support the Web Serial API.
+    Open this page in Chrome, Edge, or another Chromium-based browser
+    to connect to a board.
   </p>
 
+
+  <!-- ==========================================================
+       ESP32 BOARD
+       ========================================================== -->
+
   <section class="panel panel--board">
+
     <div class="board-wrap">
+
       <div class="board">
-        <div id="boardTop" class="board__row board__row--top"></div>
+
+        <div
+          id="boardTop"
+          class="board__row board__row--top"
+        ></div>
+
 
         <div class="board__middle">
+
           <div class="board__module">
+
             <div class="board__module-shield"></div>
-            <span class="board__module-label">ESP32<br>WROOM-32</span>
-            <svg class="board__antenna" viewBox="0 0 40 40" fill="none">
-              <path d="M2 38 L2 20 Q2 2 20 2" stroke="currentColor" stroke-width="2"/>
-              <path d="M8 38 L8 22 Q8 8 20 8" stroke="currentColor" stroke-width="2"/>
-              <path d="M14 38 L14 24 Q14 14 20 14" stroke="currentColor" stroke-width="2"/>
+
+            <span class="board__module-label">
+              ESP32<br>WROOM-32
+            </span>
+
+            <svg
+              class="board__antenna"
+              viewBox="0 0 40 40"
+              fill="none"
+            >
+              <path
+                d="M2 38 L2 20 Q2 2 20 2"
+                stroke="currentColor"
+                stroke-width="2"
+              />
+
+              <path
+                d="M8 38 L8 22 Q8 8 20 8"
+                stroke="currentColor"
+                stroke-width="2"
+              />
+
+              <path
+                d="M14 38 L14 24 Q14 14 20 14"
+                stroke="currentColor"
+                stroke-width="2"
+              />
             </svg>
+
           </div>
+
+
           <div class="board__indicators">
+
             <div class="indicator">
-              <span class="indicator__dot indicator__dot--power" id="powerLed"></span>
-              <span class="indicator__label">PWR</span>
+
+              <span
+                class="indicator__dot indicator__dot--power"
+                id="powerLed"
+              ></span>
+
+              <span class="indicator__label">
+                PWR
+              </span>
+
             </div>
+
+
             <div class="indicator">
-              <span class="indicator__dot indicator__dot--status" id="statusLed"></span>
-              <span class="indicator__label">D2</span>
+
+              <span
+                class="indicator__dot indicator__dot--status"
+                id="statusLed"
+              ></span>
+
+              <span class="indicator__label">
+                D2
+              </span>
+
             </div>
+
           </div>
+
+
           <div class="board__usb">
             <span>USB</span>
           </div>
+
         </div>
 
-        <div id="boardBottom" class="board__row board__row--bottom"></div>
+
+        <div
+          id="boardBottom"
+          class="board__row board__row--bottom"
+        ></div>
+
       </div>
 
+
       <p class="board__note">
-        Layout read from your board's silkscreen &mdash; still best-effort. Click any pin to
-        graph it over time. Doesn't match? Edit <code>BOARD_TOP</code> / <code>BOARD_BOTTOM</code>
-        in <code>app.js</code>.
+
+        Layout matched to the photographed 30-pin ESP32 DevKit board.
+        Click a pin to graph it.
+        Click the <strong>ⓘ</strong> beside a pin to see its
+        input/reading information.
+
       </p>
+
     </div>
+
   </section>
+
+
+  <!-- ==========================================================
+       OTHER PINS + GRAPH
+       ========================================================== -->
 
   <main class="rack__body">
 
     <section class="panel panel--other">
+
       <div class="panel__head">
+
         <h2>Other reported pins</h2>
-        <span id="pinCount" class="panel__meta">waiting for data&hellip;</span>
+
+        <span
+          id="pinCount"
+          class="panel__meta"
+        >
+          waiting for data…
+        </span>
+
       </div>
+
+
       <div id="pinGrid" class="pin-grid">
+
         <p class="empty-state">
-          Pins your firmware reports that aren't on the diagram above show up here.
-          Click one to graph it too.
+
+          Pins your firmware reports that aren't on the
+          physical board diagram appear here.
+
         </p>
+
       </div>
+
     </section>
 
+
     <section class="panel panel--graph">
+
       <div class="panel__head">
+
         <h2>Pin history</h2>
-        <span id="graphMeta" class="panel__meta">click a pin to graph it</span>
+
+        <span
+          id="graphMeta"
+          class="panel__meta"
+        >
+          click a pin to graph it
+        </span>
+
       </div>
+
+
       <div class="graph-wrap">
-        <svg id="graphSvg" viewBox="0 0 480 200" preserveAspectRatio="none"></svg>
-        <p id="graphEmpty" class="empty-state">No pin selected yet.</p>
+
+        <svg
+          id="graphSvg"
+          viewBox="0 0 480 200"
+          preserveAspectRatio="none"
+        ></svg>
+
+        <p
+          id="graphEmpty"
+          class="empty-state"
+        >
+          No pin selected yet.
+        </p>
+
       </div>
+
     </section>
 
   </main>
 
+
+  <!-- ==========================================================
+       SERIAL CONSOLE
+       ========================================================== -->
+
   <section class="panel panel--console">
+
     <div class="panel__head">
+
       <h2>Serial monitor</h2>
+
       <div class="panel__actions">
+
         <label class="checkbox">
-          <input type="checkbox" id="hideTelemetry">
+
+          <input
+            type="checkbox"
+            id="hideTelemetry"
+          >
+
           Hide <code>&lt;PR&gt;</code> lines
+
         </label>
-        <button id="clearConsole" class="btn btn--small">Clear</button>
+
+        <button
+          id="clearConsole"
+          class="btn btn--small"
+        >
+          Clear
+        </button>
+
       </div>
+
     </div>
-    <div id="console" class="console"></div>
-    <form id="sendForm" class="send-row">
-      <input id="sendInput" type="text" placeholder="Send a line to the board&hellip;" autocomplete="off">
-      <select id="lineEnding" class="send-row__ending">
+
+
+    <div
+      id="console"
+      class="console"
+    ></div>
+
+
+    <form
+      id="sendForm"
+      class="send-row"
+    >
+
+      <input
+        id="sendInput"
+        type="text"
+        placeholder="Send a line to the board…"
+        autocomplete="off"
+      >
+
+      <select
+        id="lineEnding"
+        class="send-row__ending"
+      >
+
         <option value="\n">\n</option>
         <option value="\r\n" selected>\r\n</option>
         <option value="">none</option>
+
       </select>
-      <button type="submit" class="btn btn--primary">Send</button>
+
+      <button
+        type="submit"
+        class="btn btn--primary"
+      >
+        Send
+      </button>
+
     </form>
+
   </section>
 
+
   <footer class="rack__footer">
-    <span>Protocol: firmware emits <code>&lt;PR&gt;{...}&lt;/PR&gt;</code> lines; see <code>firmware/pin_reporter.h</code>.</span>
+
+    <span>
+      Protocol: firmware emits
+      <code>&lt;PR&gt;{...}&lt;/PR&gt;</code>
+      lines; see
+      <code>firmware/pin_reporter.h</code>.
+    </span>
+
   </footer>
 
 </div>
 
+
 <script src="app.js"></script>
+
 </body>
 </html>
