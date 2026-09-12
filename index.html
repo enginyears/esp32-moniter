@@ -45,6 +45,12 @@
 
   <section class="panel panel--board">
     <div class="board-wrap">
+      <div class="board-pcb">
+        <span class="board-pcb__hole board-pcb__hole--tl"></span>
+        <span class="board-pcb__hole board-pcb__hole--tr"></span>
+        <span class="board-pcb__hole board-pcb__hole--bl"></span>
+        <span class="board-pcb__hole board-pcb__hole--br"></span>
+
       <div class="board">
 
         <div id="boardLeft" class="board__col board__col--left"></div>
@@ -86,6 +92,7 @@
         <div id="boardRight" class="board__col board__col--right"></div>
 
       </div>
+      </div>
 
       <div class="board__legend">
         <span><span class="legend-icon">⏚</span> GND</span>
@@ -99,6 +106,17 @@
         <span class="board__other-label">Other signals:</span>
         <span id="otherSignalsList" class="board__other-list"></span>
       </div>
+    </div>
+  </section>
+
+  <section class="panel panel--graph">
+    <div class="panel__head">
+      <h2>Pin history</h2>
+      <span id="graphMeta" class="panel__meta">click a pin to graph it</span>
+    </div>
+    <div class="graph-wrap">
+      <svg id="graphSvg" viewBox="0 0 520 220" preserveAspectRatio="none"></svg>
+      <p id="graphEmpty" class="empty-state">No pin selected yet.</p>
     </div>
   </section>
 
@@ -123,17 +141,6 @@
       </select>
       <button type="submit" class="btn btn--primary">Send</button>
     </form>
-  </section>
-
-  <section class="panel panel--graph">
-    <div class="panel__head">
-      <h2>Pin history</h2>
-      <span id="graphMeta" class="panel__meta">click a pin to graph it</span>
-    </div>
-    <div class="graph-wrap">
-      <svg id="graphSvg" viewBox="0 0 520 220" preserveAspectRatio="none"></svg>
-      <p id="graphEmpty" class="empty-state">No pin selected yet.</p>
-    </div>
   </section>
 
   <footer class="rack__footer">

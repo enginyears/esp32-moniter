@@ -422,17 +422,18 @@ function renderGraph() {
   els.graphEmpty.hidden = true;
   const info = TYPE_INFO[meta.type] || TYPE_INFO.d;
   const now = Date.now();
-  const points = hist.filter((s) => now - s.t <= GRAPH_WINDOW_MS);
+  // Fixed 30s window: the axis always spans 0–30s, regardless of how much
+  // data has actually been collected yet (a fresh selection just shows a
+  // short line near the right edge until the buffer fills up).
+  const windowStart = now - GRAPH_WINDOW_MS;
+  const points = hist.filter((s) => s.t >= windowStart);
   const usable = points.length >= 2 ? points : hist.slice(-2);
 
   const W = 520, H = 220, PAD_L = 34, PAD_R = 10, PAD_T = 10, PAD_B = 24;
   const plotW = W - PAD_L - PAD_R, plotH = H - PAD_T - PAD_B;
 
-  const t0 = usable[0].t;
-  const tSpan = Math.max(1, usable[usable.length - 1].t - t0);
-
   const toXY = (s) => {
-    const x = PAD_L + ((s.t - t0) / tSpan) * plotW;
+    const x = PAD_L + ((s.t - windowStart) / GRAPH_WINDOW_MS) * plotW;
     const y = PAD_T + plotH - (s.val / info.max) * plotH;
     return [x, y];
   };
@@ -454,16 +455,30 @@ function renderGraph() {
   }
 
   const latest = usable[usable.length - 1].val;
-  const windowSec = Math.round(Math.min(GRAPH_WINDOW_MS, now - t0) / 1000);
-  els.graphMeta.textContent = label + ' · ' + latest + info.unit + ' · last ' + windowSec + 's';
+  els.graphMeta.textContent = label + ' · ' + latest + info.unit;
+
+  const windowSec = GRAPH_WINDOW_MS / 1000;
+  let xTicks = '';
+  for (let sec = 0; sec <= windowSec; sec += 5) {
+    const x = PAD_L + (sec * 1000 / GRAPH_WINDOW_MS) * plotW;
+    const anchor = sec === 0 ? 'start' : sec === windowSec ? 'end' : 'middle';
+    xTicks += `<text class="graph-tick" text-anchor="${anchor}" x="${x.toFixed(1)}" y="${H - 6}">${sec}s</text>`;
+  }
+
+  // Digital (0/1) skips numeric y ticks — not useful at that resolution.
+  // PWM (0–255) gets even steps; analog (0–4095) gets a coarser default spread.
+  const yValues = info.max === 1 ? [] : info.max === 255 ? [0, 50, 100, 150, 200, 255] : [0, 1024, 2048, 3072, 4095];
+  let yTicks = '';
+  for (const v of yValues) {
+    const y = PAD_T + plotH - (v / info.max) * plotH;
+    yTicks += `<text class="graph-tick" x="2" y="${(y + 3).toFixed(1)}">${v}</text>`;
+  }
 
   els.graphSvg.innerHTML = `
     <line class="graph-axis" x1="${PAD_L}" y1="${PAD_T + plotH}" x2="${PAD_L + plotW}" y2="${PAD_T + plotH}" />
     <line class="graph-axis" x1="${PAD_L}" y1="${PAD_T}" x2="${PAD_L}" y2="${PAD_T + plotH}" />
-    <text class="graph-tick" x="4" y="${PAD_T + 4}">${info.max}</text>
-    <text class="graph-tick" x="4" y="${PAD_T + plotH}">0</text>
-    <text class="graph-tick" x="${PAD_L}" y="${H - 6}">-${windowSec}s</text>
-    <text class="graph-tick" x="${PAD_L + plotW - 18}" y="${H - 6}">now</text>
+    ${xTicks}
+    ${yTicks}
     <path class="graph-line" d="${pathD}" />
   `;
 }

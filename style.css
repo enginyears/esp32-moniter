@@ -104,11 +104,33 @@ html, body {
   background-position: center;
 }
 
-.board {
-  max-width: 420px;
+.board-pcb {
+  position: relative;
+  max-width: 460px;
   margin: 0 auto;
+  background: linear-gradient(160deg, #161b21, #0d1116);
+  border: 1px solid #232c36;
+  border-radius: 28px;
+  padding: 26px 18px 18px;
+}
+
+.board-pcb__hole {
+  position: absolute;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #05070b;
+  border: 1px solid #2a3542;
+}
+.board-pcb__hole--tl { top: 10px; left: 10px; }
+.board-pcb__hole--tr { top: 10px; right: 10px; }
+.board-pcb__hole--bl { bottom: 10px; left: 10px; }
+.board-pcb__hole--br { bottom: 10px; right: 10px; }
+
+.board {
   display: flex;
   justify-content: center;
+  align-items: stretch;
   gap: 6px;
 }
 
@@ -196,7 +218,7 @@ html, body {
 .board__resistor { width: 16px; height: 8px; background: #2a2015; border: 1px solid #4a3620; border-radius: 2px; }
 .board__cap { width: 10px; height: 14px; background: #1c1c1c; border: 1px solid #3a3a3a; border-radius: 2px; }
 
-.board__usb-row { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; margin-top: 4px; }
+.board__usb-row { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; margin-top: auto; padding-top: 16px; }
 
 .board__button {
   width: 22px; height: 22px; border-radius: 50%;
@@ -204,8 +226,8 @@ html, body {
   font-size: 6.5px; cursor: help; display: flex; align-items: center; justify-content: center;
 }
 
-.board__usb { width: 40px; height: 46px; background: #1a2129; border: 1px solid #2a3542; border-radius: 2px; display: flex; align-items: center; justify-content: center; }
-.board__usb span { writing-mode: vertical-rl; font-size: 8px; color: var(--text-dim); letter-spacing: 0.1em; }
+.board__usb { width: 58px; height: 26px; background: #1a2129; border: 1px solid #2a3542; border-radius: 2px; display: flex; align-items: center; justify-content: center; }
+.board__usb span { font-size: 8px; color: var(--text-dim); letter-spacing: 0.1em; }
 
 /* Legend + inline "other signals" strip */
 
