@@ -2,158 +2,154 @@
 
 A static website that connects to an ESP32 over USB (via the [Web Serial
 API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Serial_API)) and
-shows:
+shows a board diagram with live pin values, a serial monitor, and a
+click-to-graph pin history — no server, no build step, no external
+dependencies (works fully offline once loaded).
 
-- a board diagram styled after a real ESP32 DevKit, with each pin's live
-  value shown right next to it — click any pin to graph its value over time
-- digital pins graph as a step trace, analog/PWM as a normal line
-- pins flagged with **i** for known caveats (input-only ADC pins, or pins
-  reserved for the module's internal flash)
-- a normal serial monitor for everything else your sketch prints
-- a box to send text back to the board
+Live site: https://enginyears.github.io/esp32-moniter/
 
-No server, no build step, no external dependencies (including no Google
-Fonts — everything renders with system fonts, so it works fully offline
-once the page itself is loaded/cached).
+## Board layout — confirmed against your actual board
 
-## ⚠ Board layout is not yet confirmed
+Read directly off a clear photo of your board: a 30-pin ESP32-WROOM-32
+DevKit, 15 pins per side. This variant keeps GPIO16/17 (`RX2`/`TX2`) but
+doesn't break out the flash pins (GPIO9/10/11) at all — that's the actual
+difference from the 38-pin variant, not just a smaller header count.
 
-The pin diagram (`BOARD_TOP` / `BOARD_BOTTOM` in `app.js`) was read off a
-photo of one specific board and has **not** been independently verified —
-in particular there's an open question of whether that board is a 30-pin or
-38-pin ESP32 DevKit, which changes whether `TX2`/`RX2` (GPIO17/16) actually
-exist on it. If your board's printed labels don't match what's on screen,
-edit those two arrays — each entry is:
+If you ever swap to a different board, edit `BOARD_LEFT` / `BOARD_RIGHT` in
+`app.js`. Each entry:
 
 ```js
-{ silk: 'label printed on your board', pin: <GPIO number>, kind: 'gnd' | 'power' }
+{ silk: 'label on your board', pin: <GPIO or null>, kind?: 'gnd'|'power', uart?: true }
 ```
 
-Use `pin: null` for non-GPIO pins, and set `kind: 'gnd'` (renders `⏚`) or
-`kind: 'power'` (lights up while connected, for 3V3/VIN/EN) so those still
-display sensibly.
+## Legend
+
+- **⏚** — ground pin
+- **⚡** — power pin (3V3 / VIN / EN); lights up while connected as an
+  inferred "powered" indicator, not a real voltage measurement
+- **⇄** — UART pin (fixed hardware assignment: TX0/RX0 = UART0, TX2/RX2 = UART2)
+- **∿** — shown next to a pin's value while your firmware is currently
+  reporting it as PWM
+- **⛔** — avoid using as GPIO (wired to the module's internal SPI flash)
+
+The small circled **i** on GPIO34/35/36/39 (input-only, no output driver, no
+internal pull-up/down) isn't in the legend — hover it on the pin itself for
+the explanation.
 
 ## What this does not do, and why
 
 **It cannot see the value of an arbitrary pin just because your code exists
-on the chip.** USB serial is a plain byte stream — the website only ever
-receives what your firmware chooses to `Serial.print()`. There is no way for
-a browser, or anything on the host PC, to read GPIO state directly over a
-USB-serial link.
-
-So the pin dashboard works like this: your sketch includes
-[`firmware/pin_reporter.h`](firmware/pin_reporter.h), lists the pins you
-care about, and calls one function in `loop()`. That function periodically
-prints a single tagged line like:
+on the chip.** USB serial is a plain byte stream — the site only ever
+receives what your firmware chooses to `Serial.print()`. Your sketch
+includes [`pin_reporter.h`](pin_reporter.h), lists the
+pins you care about, and calls one function in `loop()` that periodically
+prints a tagged line:
 
 ```
-<PR>{"t":48213,"pins":[{"pin":2,"type":"d","val":1,"label":"onboard_led"},{"pin":5,"type":"p","val":128,"label":"fan_pwm"}]}</PR>
+<PR>{"t":48213,"pins":[{"pin":2,"type":"d","val":1,"label":"onboard_led"}]}</PR>
 ```
 
-The website looks for `<PR>...</PR>` on each line, parses the JSON, and
-updates the dashboard — everything else in the stream (your own debug
-prints) just shows up in the console untouched.
+The site parses `<PR>...</PR>` lines and updates the dashboard; everything
+else in the stream (your own debug prints) shows up in the console
+untouched. Any reported pin not on the diagram appears as a small inline
+"Other signals" chip under the legend instead of a full card — click it to
+graph it too.
 
-**This also does not flash arbitrary `.ino`/PlatformIO projects from the
-browser.** A browser can't compile Arduino/ESP-IDF C++. You flash normally
-(Arduino IDE / PlatformIO / `arduino-cli`); this website only *talks* to the
-board afterwards over the same USB-serial connection.
+**This does not flash arbitrary `.ino`/PlatformIO projects from the
+browser** — a browser can't compile C++. Flash normally, then connect from
+here afterwards over the same USB-serial link.
 
-**The two LED indicators next to the chip are not both real readings.**
-- `D2` (blue) is real — it mirrors whatever your firmware reports for
-  GPIO2, the pin this board's onboard status LED is wired to.
-- `LINK` (red) is **not** a real power reading — the board's actual power
-  LED is hardwired straight to the 3.3V rail, which the browser has no way
-  to read over serial. `LINK` instead reflects whether the Web Serial
-  connection is currently open, as the closest available proxy. Same idea
-  for the small dots next to the 3V3/VIN/EN pins — they light up while
-  connected, not because anything measured actual voltage there.
+**`LINK` (red) is not a real power reading.** The board's actual power LED
+is hardwired to 3.3V, unreadable over serial. `LINK` reflects whether the
+Web Serial connection is open, as the closest available proxy. `D2` (blue)
+*is* real — it mirrors GPIO2's live state from your firmware.
 
-## Pin caveats (the **i** badges)
+**Disconnecting now blanks every value on screen** — previously a value
+could sit on screen showing stale data after disconnect; `resetLiveValues()`
+clears the dashboard, LEDs, and "other signals" list every time the
+connection drops (including an unexpected unplug).
 
-- **Input-only** (GPIO 34/35/36/39): these have no output driver and no
-  internal pull-up/down on the ESP32 silicon itself — fine to read, don't
-  try to drive them as outputs.
-- **Flash-reserved** (GPIO 6–11): wired internally to the module's SPI
-  flash chip on a standard ESP32-WROOM-32. Using these as general-purpose
-  GPIO will interfere with the chip reading its own program and will likely
-  crash or fail to boot. They're flagged, not hidden, in case your specific
-  board exposes them for another reason — but don't wire anything to them
-  without knowing exactly why.
+**The `EN` / `BOOT` buttons drawn on the diagram are not clickable** — they
+represent the buttons on the physical board so the diagram reads correctly;
+pressing them only works with your fingers, not the mouse.
 
 ## Firmware side
 
-1. Copy `firmware/pin_reporter.h` into your project:
-   - **Arduino IDE**: same folder as your `.ino` (shows as a second tab).
-   - **PlatformIO**: into `include/` (auto-added to the compiler's search
-     path, so `#include "pin_reporter.h"` from `src/main.cpp` finds it).
-2. Look at `firmware/example_sketch/example_sketch.ino` for the pattern:
-   - `#include "pin_reporter.h"` and declare `PinReporter PinRep;`
-   - list the pins you want visible, with a type per pin:
-     - `PR_DIGITAL_IN` / `PR_DIGITAL_OUT` — reports 0/1 via `digitalRead()`
-     - `PR_PWM` — reports 0–255 via `ledcRead()`. **API differs by ESP32
-       Arduino core version**: core 3.x+ (current) uses
-       `ledcAttach(pin, freq, resolution)` / `ledcWrite(pin, duty)`,
-       addressed by pin. Older core 2.x uses channel-based
-       `ledcSetup(channel, ...)` / `ledcAttachPin(pin, channel)` /
-       `ledcWrite(channel, duty)` — if you're on that core, change
-       `pin_reporter.h`'s `PR_PWM` case back to `ledcRead(p.ledcChannel)`.
-     - `PR_ANALOG_IN` — reports the raw 0–4095 ADC reading via
-       `analogRead()`
-   - call `PinRep.begin(pins, count, intervalMs)` once in `setup()`
-   - call `PinRep.loop()` once per `loop()` iteration
-3. Flash normally, then **close your IDE's own serial monitor** before
-   opening the website — only one program can hold the serial port at a
-   time.
-4. If the LED stops blinking right after you connect from the website: this
-   is expected, not a bug. Opening a serial connection can toggle DTR/RTS
-   lines through the board's auto-reset circuit, which can drop the chip
-   into bootloader mode. Press the physical **EN**/RST button once after
-   connecting to force it back into normal run mode.
+1. Copy `firmware/pin_reporter.h` into your project (Arduino IDE: same
+   folder as your `.ino`; PlatformIO: into `include/`).
+2. See `firmware/example_sketch/example_sketch.ino` for the pattern —
+   `PR_DIGITAL_IN`/`PR_DIGITAL_OUT` (0/1 via `digitalRead()`), `PR_PWM`
+   (0–255 via `ledcRead()` — **core 3.x+ uses `ledcAttach(pin,...)` /
+   `ledcWrite(pin,...)`, addressed by pin; older core 2.x uses
+   channel-based `ledcSetup`/`ledcAttachPin`/`ledcWrite(channel,...)`,
+   in which case revert `pin_reporter.h`'s `PR_PWM` case to
+   `ledcRead(p.ledcChannel)`), or `PR_ANALOG_IN` (0–4095 via `analogRead()`).
+   Call `PinRep.begin(pins, count, intervalMs)` once in `setup()` and
+   `PinRep.loop()` once per `loop()`.
+3. Close your IDE's own serial monitor before connecting from the website —
+   only one program can hold the port at a time.
+4. If the LED stops blinking right after connecting: expected, not a bug —
+   opening the serial connection can toggle DTR/RTS through the board's
+   auto-reset circuit and drop it into bootloader mode. Press the physical
+   **EN** button once to force it back into normal run mode.
 
 ## Website side
 
-Files:
-
 ```
 index.html   — page structure
-style.css    — PCB/HUD styling (no external font dependency)
+style.css    — PCB/HUD styling, no external font dependency
 app.js       — Web Serial connect/read/write, board layout, graphing, staleness
 ```
 
-Open the page, click **Connect device**, pick your board's port (look for
-"USB Single Serial" or similar — not a Bluetooth or motherboard COM port),
-match the baud rate to your sketch's `Serial.begin()` value (115200 by
-default), and the diagram updates as soon as the first `<PR>` line arrives.
+Open, **Connect device**, pick the port labeled something like "USB Single
+Serial" (not a Bluetooth or motherboard COM port), match the baud rate to
+your sketch, done.
 
 ### Running locally
 
 ```bash
 python3 -m http.server 8000
 ```
-
-Then open `http://localhost:8000`. Web Serial requires `localhost` or
-HTTPS — it will not work opened directly as a `file://` path.
+Open `http://localhost:8000` — Web Serial needs `localhost` or HTTPS, not `file://`.
 
 ### Deploying to GitHub Pages
 
-1. Push this folder to your repo.
-2. Repo **Settings → Pages → Source**: deploy from the branch containing
-   these files.
-3. GitHub Pages serves over HTTPS automatically. Source: [enginyears.github.io/esp32-moniter](https://enginyears.github.io/esp32-moniter/)
+Push to your repo, enable Pages in **Settings → Pages**, done — Pages
+serves HTTPS automatically.
 
 ## Browser support
 
-Web Serial is Chromium-only: Chrome, Edge, Opera, Brave. Not available in
-Firefox or Safari. The page shows a warning and disables the connect button
-if it detects an unsupported browser.
+Web Serial is Chromium-only (Chrome, Edge, Opera, Brave) — not Firefox or
+Safari. The page warns and disables the connect button if unsupported.
 
-## Extending it
+## Suggested next features
 
-- **More pins / different board**: edit `BOARD_TOP` / `BOARD_BOTTOM` — the
-  fallback list below the diagram still catches anything not listed there,
-  so nothing is ever lost even mid-edit.
-- **Different stale/removal timing**: `STALE_MS` and `FALLBACK_REMOVE_MS`
-  near the top of `app.js`.
-- **One-click flashing**: add `esptool-js` and a precompiled `.bin` if you
-  later want to flash from the page instead of your IDE.
+**Must-have, if you're going to rely on this day to day:**
+- **Auto-reconnect** to the last-used port on page load (Web Serial exposes
+  already-granted ports via `navigator.serial.getPorts()`), so you're not
+  re-picking the device every refresh.
+- **Export history** — a "download CSV" button for the currently graphed
+  pin's buffered samples, since the in-memory history disappears on refresh.
+- **Multiple pins on one graph at once** — right now it's one pin at a
+  time; overlaying two or three (e.g. a button and the LED it drives) would
+  make cause/effect a lot easier to read.
+- **A visible warning when two pins' report intervals imply the firmware is
+  flooding the serial line** (e.g. reporting >20 pins at 10ms) — right now
+  a misconfigured `intervalMs` just quietly saturates the port.
+
+**Nice-to-have:**
+- **Persist the legend/board choice** in `localStorage` so returning users
+  don't need to re-check anything (not needed for the pin data itself,
+  which should stay live-only).
+- **A "record" toggle** that keeps the full session log downloadable as
+  `.txt`, separate from the scrollback buffer.
+- **Command presets** — buttons for a few frequently sent serial strings
+  instead of retyping them in the send box each time.
+- **Dark/light theme toggle**, if you ever demo this somewhere brightly lit.
+
+**On multi-board support later:** the cleanest path when you get there is a
+`BOARD_PROFILES` object (one entry per board: its `left`/`right` pin
+arrays, `statusLedPin`, `inputOnlyPins`, `flashReservedPins`) with a
+dropdown that swaps which profile `app.js` builds from — the rest of the
+app (telemetry parsing, graphing, staleness) doesn't need to change at all,
+since none of it assumes a specific board today.
