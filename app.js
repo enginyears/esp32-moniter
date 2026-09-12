@@ -1,1683 +1,548 @@
-// Bench — ESP32 pin monitor
-//
-// Talks to an ESP32 board over Web Serial.
-//
-// Incoming lines containing:
-//
-//   <PR>{...}</PR>
-//
-// are treated as telemetry.
-//
-// Everything else is displayed in the serial console.
-//
-// The board diagram below matches the photographed 30-pin ESP32
-// DevKit-style board.
+// Bench — talks to a board over Web Serial, splits incoming text into lines,
+// and treats any line matching <PR>{...}</PR> as pin telemetry (see
+// firmware/pin_reporter.h). Everything else is just shown in the console.
 
-
-/* ==========================================================
-   BOARD LAYOUT
-   ==========================================================
-
-   Your photographed board is a 30-pin ESP32 board.
-
-   SIDE 1:
-   3V3
-   GND
-   D15
-   D2
-   D4
-   RX2
-   TX2
-   D5
-   D18
-   D19
-   D21
-   RX0
-   TX0
-   D22
-   D23
-
-   SIDE 2:
-   VIN
-   GND
-   D13
-   D12
-   D14
-   D27
-   D26
-   D25
-   D33
-   D32
-   D35
-   D34
-   VN
-   VP
-   EN
-
-   ========================================================== */
+// ---------------------------------------------------------------------------
+// Board layout — best-effort reading of the photographed board's silkscreen.
+// NOT independently confirmed against your exact board (a 30-pin vs 38-pin
+// mismatch was flagged and unresolved as of this version) — verify against
+// your board and edit these arrays if anything is off. Each entry:
+//   { silk: 'label on your board', pin: GPIO number or null, kind?: 'gnd'|'power' }
+// `kind` only applies to null-pin (non-GPIO) entries.
+// ---------------------------------------------------------------------------
 
 const BOARD_TOP = [
-
-  { silk: '3V3', pin: null },
-
-  { silk: 'GND', pin: null },
-
-  { silk: 'D15', pin: 15 },
-
-  { silk: 'D2', pin: 2 },
-
-  { silk: 'D4', pin: 4 },
-
-  { silk: 'RX2', pin: 16 },
-
-  { silk: 'TX2', pin: 17 },
-
-  { silk: 'D5', pin: 5 },
-
-  { silk: 'D18', pin: 18 },
-
-  { silk: 'D19', pin: 19 },
-
-  { silk: 'D21', pin: 21 },
-
-  { silk: 'RX0', pin: 3 },
-
-  { silk: 'TX0', pin: 1 },
-
-  { silk: 'D22', pin: 22 },
-
+  { silk: '3V3', pin: null, kind: 'power' },
   { silk: 'D23', pin: 23 },
-
+  { silk: 'D22', pin: 22 },
+  { silk: 'TX0', pin: 1 },
+  { silk: 'RX0', pin: 3 },
+  { silk: 'D19', pin: 19 },
+  { silk: 'D18', pin: 18 },
+  { silk: 'D5',  pin: 5 },
+  { silk: 'TX2', pin: 17 },
+  { silk: 'RX2', pin: 16 },
+  { silk: 'D4',  pin: 4 },
+  { silk: 'D2',  pin: 2 },
+  { silk: 'D15', pin: 15 },
+  { silk: 'GND', pin: null, kind: 'gnd' },
 ];
-
 
 const BOARD_BOTTOM = [
-
-  { silk: 'VIN', pin: null },
-
-  { silk: 'GND', pin: null },
-
-  { silk: 'D13', pin: 13 },
-
-  { silk: 'D12', pin: 12 },
-
-  { silk: 'D14', pin: 14 },
-
-  { silk: 'D27', pin: 27 },
-
-  { silk: 'D26', pin: 26 },
-
-  { silk: 'D25', pin: 25 },
-
-  { silk: 'D33', pin: 33 },
-
-  { silk: 'D32', pin: 32 },
-
-  { silk: 'D35', pin: 35 },
-
+  { silk: 'VIN', pin: null, kind: 'power' },
+  { silk: 'EN',  pin: null, kind: 'power' },
+  { silk: 'VP',  pin: 36 },
+  { silk: 'VN',  pin: 39 },
   { silk: 'D34', pin: 34 },
-
-  { silk: 'VN', pin: 39 },
-
-  { silk: 'VP', pin: 36 },
-
-  { silk: 'EN', pin: null },
-
+  { silk: 'D35', pin: 35 },
+  { silk: 'D32', pin: 32 },
+  { silk: 'D33', pin: 33 },
+  { silk: 'D25', pin: 25 },
+  { silk: 'D26', pin: 26 },
+  { silk: 'D27', pin: 27 },
+  { silk: 'D14', pin: 14 },
+  { silk: 'D12', pin: 12 },
+  { silk: 'D13', pin: 13 },
+  { silk: 'D9',  pin: 9 },
+  { silk: 'D10', pin: 10 },
+  { silk: 'D11', pin: 11 },
+  { silk: 'GND', pin: null, kind: 'gnd' },
 ];
 
-
-// Blue onboard status LED.
-// On the photographed board this is GPIO2.
+// The blue status LED on this board is wired to GPIO2. Change if yours differs.
 const STATUS_LED_PIN = 2;
 
+// ADC1-only pins with no output driver and no internal pull-up/down.
+const INPUT_ONLY_PINS = new Set([34, 35, 36, 39]);
+// Connected to the module's internal SPI flash on a standard WROOM-32 — don't use as GPIO.
+const FLASH_RESERVED_PINS = new Set([6, 7, 8, 9, 10, 11]);
 
-// Maximum number of history samples retained for each pin.
-const HISTORY_LIMIT = 300;
-
-
-// Graph displays the most recent 30 seconds.
-const GRAPH_WINDOW_MS = 30000;
-
-
-// ==========================================================
-// DOM ELEMENTS
-// ==========================================================
+const HISTORY_LIMIT = 300;          // samples kept per pin
+const GRAPH_WINDOW_MS = 30000;      // graph window shown
+const STALE_MS = 4000;              // board pin dims after this long with no update
+const FALLBACK_REMOVE_MS = 15000;   // fallback card removed after this long with no update
 
 const els = {
-
-  connectBtn:
-    document.getElementById('connectBtn'),
-
-  disconnectBtn:
-    document.getElementById('disconnectBtn'),
-
-  baudRate:
-    document.getElementById('baudRate'),
-
-  connDot:
-    document.getElementById('connDot'),
-
-  connLabel:
-    document.getElementById('connLabel'),
-
-  supportWarning:
-    document.getElementById('supportWarning'),
-
-  boardTop:
-    document.getElementById('boardTop'),
-
-  boardBottom:
-    document.getElementById('boardBottom'),
-
-  powerLed:
-    document.getElementById('powerLed'),
-
-  statusLed:
-    document.getElementById('statusLed'),
-
-  pinGrid:
-    document.getElementById('pinGrid'),
-
-  pinCount:
-    document.getElementById('pinCount'),
-
-  console:
-    document.getElementById('console'),
-
-  hideTelemetry:
-    document.getElementById('hideTelemetry'),
-
-  clearConsole:
-    document.getElementById('clearConsole'),
-
-  sendForm:
-    document.getElementById('sendForm'),
-
-  sendInput:
-    document.getElementById('sendInput'),
-
-  lineEnding:
-    document.getElementById('lineEnding'),
-
-  graphSvg:
-    document.getElementById('graphSvg'),
-
-  graphEmpty:
-    document.getElementById('graphEmpty'),
-
-  graphMeta:
-    document.getElementById('graphMeta'),
-
+  connectBtn: document.getElementById('connectBtn'),
+  disconnectBtn: document.getElementById('disconnectBtn'),
+  baudRate: document.getElementById('baudRate'),
+  connDot: document.getElementById('connDot'),
+  connLabel: document.getElementById('connLabel'),
+  supportWarning: document.getElementById('supportWarning'),
+  boardTop: document.getElementById('boardTop'),
+  boardBottom: document.getElementById('boardBottom'),
+  linkLed: document.getElementById('linkLed'),
+  statusLed: document.getElementById('statusLed'),
+  pinGrid: document.getElementById('pinGrid'),
+  pinCount: document.getElementById('pinCount'),
+  console: document.getElementById('console'),
+  hideTelemetry: document.getElementById('hideTelemetry'),
+  clearConsole: document.getElementById('clearConsole'),
+  sendForm: document.getElementById('sendForm'),
+  sendInput: document.getElementById('sendInput'),
+  lineEnding: document.getElementById('lineEnding'),
+  graphSvg: document.getElementById('graphSvg'),
+  graphEmpty: document.getElementById('graphEmpty'),
+  graphMeta: document.getElementById('graphMeta'),
 };
-
-
-// ==========================================================
-// SERIAL / TELEMETRY STATE
-// ==========================================================
 
 const PR_OPEN = '<PR>';
-
 const PR_CLOSE = '</PR>';
 
-
 let port = null;
-
 let reader = null;
-
 let writer = null;
-
 let readLoopPromise = null;
-
 let keepReading = false;
-
+let userInitiatedDisconnect = false;
 let lineBuffer = '';
 
-
-// GPIO -> board UI elements
-const boardSlots = new Map();
-
-
-// GPIO -> fallback card
-const fallbackCards = new Map();
-
-
-// GPIO -> historical readings
-const pinHistory = new Map();
-
-
-// GPIO -> latest metadata
-const pinMeta = new Map();
-
-
-// Currently selected graph pin
+const boardSlots = new Map();    // gpio -> { valueEl, padEl, rowEl }
+const fallbackCards = new Map(); // gpio -> card elements
+const pinHistory = new Map();    // gpio -> [{t, val}]
+const pinMeta = new Map();       // gpio -> { label, type }
+const lastSeen = new Map();      // gpio -> timestamp
+const powerPinEls = [];          // pad elements for 3V3/VIN/EN, lit while connected
 let selectedPin = null;
 
-
-// ==========================================================
-// TELEMETRY TYPES
-// ==========================================================
-
 const TYPE_INFO = {
-
-  d: {
-    unit: '',
-    max: 1,
-    name: 'Digital'
-  },
-
-  p: {
-    unit: '/255',
-    max: 255,
-    name: 'PWM'
-  },
-
-  a: {
-    unit: '/4095',
-    max: 4095,
-    name: 'Analog'
-  },
-
+  d: { unit: '', max: 1 },
+  p: { unit: '/255', max: 255 },
+  a: { unit: '/4095', max: 4095 },
 };
 
-
-// ==========================================================
-// WEB SERIAL SUPPORT CHECK
-// ==========================================================
+// ---------------------------------------------------------------------------
+// Feature detection
+// ---------------------------------------------------------------------------
 
 if (!('serial' in navigator)) {
-
   els.supportWarning.hidden = false;
-
   els.connectBtn.disabled = true;
-
 }
 
+// ---------------------------------------------------------------------------
+// Build the static board diagram once
+// ---------------------------------------------------------------------------
 
-// ==========================================================
-// BOARD CREATION
-// ==========================================================
+function pinFlagInfo(pin) {
+  if (INPUT_ONLY_PINS.has(pin)) {
+    return 'Input-only: no output driver, no internal pull-up/down on this pin.';
+  }
+  if (FLASH_RESERVED_PINS.has(pin)) {
+    return 'Connected to the module\u2019s internal SPI flash \u2014 avoid using as general GPIO.';
+  }
+  return null;
+}
 
 function buildBoardRow(container, entries) {
-
   for (const entry of entries) {
-
     const btn = document.createElement('button');
-
     btn.type = 'button';
-
     btn.className = 'board-pin';
 
-
-    // ------------------------------------------------------
-    // Current reading value
-    // ------------------------------------------------------
-
     const value = document.createElement('span');
-
     value.className = 'board-pin__value';
 
-    value.textContent =
-      entry.pin === null ? '' : '–';
-
-
-    // ------------------------------------------------------
-    // Physical pin pad
-    // ------------------------------------------------------
-
     const pad = document.createElement('span');
-
     pad.className = 'board-pin__pad';
 
-
-    // ------------------------------------------------------
-    // Silkscreen label
-    // ------------------------------------------------------
-
     const silk = document.createElement('span');
-
     silk.className = 'board-pin__silk';
-
     silk.textContent = entry.silk;
 
-
-    // ------------------------------------------------------
-    // Information button
-    //
-    // This is the new ⓘ beside each GPIO.
-    // ------------------------------------------------------
-
-    let infoButton = null;
-
-
-    if (entry.pin !== null) {
-
-      infoButton = document.createElement('button');
-
-      infoButton.type = 'button';
-
-      infoButton.className = 'pin-info';
-
-      infoButton.textContent = 'i';
-
-      infoButton.setAttribute(
-        'aria-label',
-        `Information for GPIO ${entry.pin}`
-      );
-
-
-      // Prevent clicking the information button from
-      // selecting the pin for the graph.
-      infoButton.addEventListener(
-        'click',
-        (event) => {
-
-          event.stopPropagation();
-
-          showPinInfo(
-            infoButton,
-            entry.pin
-          );
-
-        }
-      );
-
-
-      // Hover information.
-      infoButton.addEventListener(
-        'mouseenter',
-        () => {
-
-          showPinInfo(
-            infoButton,
-            entry.pin
-          );
-
-        }
-      );
-
-
-      infoButton.addEventListener(
-        'mouseleave',
-        hidePinInfo
-      );
-
-    }
-
-
-    // Add everything to the pin button.
-
-    btn.append(
-      value,
-      pad,
-      silk
-    );
-
-
-    if (infoButton) {
-
-      btn.appendChild(infoButton);
-
-    }
-
-
-    container.appendChild(btn);
-
-
-    // ------------------------------------------------------
-    // Power / ground / EN pins are not GPIO telemetry pins.
-    // ------------------------------------------------------
+    btn.append(value, pad, silk);
 
     if (entry.pin === null) {
-
       btn.disabled = true;
-
-    }
-
-    else {
-
-      btn.addEventListener(
-        'click',
-        () => selectPin(entry.pin)
-      );
-
-
-      boardSlots.set(
-        entry.pin,
-        {
-          valueEl: value,
-          padEl: pad,
-          rowEl: btn,
-          infoEl: infoButton
-        }
-      );
-
-    }
-
-  }
-
-}
-
-
-// Build the two sides.
-
-buildBoardRow(
-  els.boardTop,
-  BOARD_TOP
-);
-
-buildBoardRow(
-  els.boardBottom,
-  BOARD_BOTTOM
-);
-
-
-// ==========================================================
-// PIN INFORMATION POPUP
-// ==========================================================
-
-let pinInfoPopup = null;
-
-
-function createPinInfoPopup() {
-
-  if (pinInfoPopup) {
-    return pinInfoPopup;
-  }
-
-
-  pinInfoPopup = document.createElement('div');
-
-  pinInfoPopup.className =
-    'pin-info-popup';
-
-
-  pinInfoPopup.setAttribute(
-    'role',
-    'tooltip'
-  );
-
-
-  document.body.appendChild(
-    pinInfoPopup
-  );
-
-
-  return pinInfoPopup;
-
-}
-
-
-function showPinInfo(button, pin) {
-
-  const popup = createPinInfoPopup();
-
-  const meta =
-    pinMeta.get(pin) || {};
-
-
-  const type =
-    TYPE_INFO[meta.type] ||
-    TYPE_INFO.d;
-
-
-  const label =
-    meta.label ||
-    `GPIO ${pin}`;
-
-
-  const value =
-    meta.value !== undefined
-      ? meta.value
-      : 'No reading yet';
-
-
-  popup.innerHTML = `
-
-    <div class="pin-info-popup__title">
-      GPIO ${pin}
-    </div>
-
-    <div class="pin-info-popup__row">
-
-      <span class="pin-info-popup__key">
-        Label
-      </span>
-
-      <span class="pin-info-popup__value">
-        ${escapeHtml(label)}
-      </span>
-
-    </div>
-
-    <div class="pin-info-popup__row">
-
-      <span class="pin-info-popup__key">
-        Type
-      </span>
-
-      <span class="pin-info-popup__value">
-        ${escapeHtml(type.name)}
-      </span>
-
-    </div>
-
-    <div class="pin-info-popup__row">
-
-      <span class="pin-info-popup__key">
-        Reading
-      </span>
-
-      <span class="pin-info-popup__value">
-        ${escapeHtml(String(value))}
-      </span>
-
-    </div>
-
-  `;
-
-
-  const rect =
-    button.getBoundingClientRect();
-
-
-  let left =
-    rect.right + 8;
-
-
-  let top =
-    rect.top;
-
-
-  // Keep the popup inside the screen.
-
-  if (left + 230 > window.innerWidth) {
-
-    left =
-      rect.left - 238;
-
-  }
-
-
-  if (top + 140 > window.innerHeight) {
-
-    top =
-      window.innerHeight - 150;
-
-  }
-
-
-  popup.style.left =
-    `${Math.max(8, left)}px`;
-
-  popup.style.top =
-    `${Math.max(8, top)}px`;
-
-
-  popup.classList.add(
-    'is-visible'
-  );
-
-}
-
-
-function hidePinInfo() {
-
-  if (!pinInfoPopup) {
-    return;
-  }
-
-  pinInfoPopup.classList.remove(
-    'is-visible'
-  );
-
-}
-
-
-// ==========================================================
-// CONNECT
-// ==========================================================
-
-els.connectBtn.addEventListener(
-  'click',
-  async () => {
-
-    try {
-
-      port =
-        await navigator.serial.requestPort();
-
-
-      await port.open({
-        baudRate:
-          Number(els.baudRate.value)
-      });
-
-
-      setConnected(true);
-
-
-      logSystem(
-        'Connected at ' +
-        els.baudRate.value +
-        ' baud.'
-      );
-
-
-      writer =
-        port.writable.getWriter();
-
-
-      keepReading = true;
-
-
-      readLoopPromise =
-        readLoop();
-
-    }
-
-    catch (err) {
-
-      if (err.name !== 'NotFoundError') {
-
-        logSystem(
-          'Connection failed: ' +
-          err.message
-        );
-
+      if (entry.kind === 'gnd') {
+        btn.classList.add('board-pin--gnd');
+        value.textContent = '\u23DA'; // ⏚ ground symbol
+      } else if (entry.kind === 'power') {
+        btn.classList.add('board-pin--power');
+        value.textContent = '';
+        powerPinEls.push(pad);
       }
+    } else {
+      value.textContent = '\u2013';
+      btn.addEventListener('click', () => selectPin(entry.pin));
+      boardSlots.set(entry.pin, { valueEl: value, padEl: pad, rowEl: btn });
 
+      const flagText = pinFlagInfo(entry.pin);
+      if (flagText) {
+        const flag = document.createElement('span');
+        flag.className = 'pin-flag';
+        flag.textContent = 'i';
+        flag.title = flagText;
+        btn.appendChild(flag);
+      }
     }
 
+    container.appendChild(btn);
   }
-);
-
-
-els.disconnectBtn.addEventListener(
-  'click',
-  () => disconnect()
-);
-
-
-// ==========================================================
-// DISCONNECT
-// ==========================================================
-
-async function disconnect() {
-
-  keepReading = false;
-
-
-  try {
-
-    if (reader) {
-
-      await reader.cancel();
-
-    }
-
-  }
-
-  catch (_) {}
-
-
-  if (readLoopPromise) {
-
-    await readLoopPromise
-      .catch(() => {});
-
-  }
-
-
-  try {
-
-    if (writer) {
-
-      writer.releaseLock();
-
-      writer = null;
-
-    }
-
-
-    if (port) {
-
-      await port.close();
-
-    }
-
-  }
-
-  catch (_) {}
-
-
-  port = null;
-
-
-  setConnected(false);
-
-
-  logSystem(
-    'Disconnected.'
-  );
-
 }
 
+buildBoardRow(els.boardTop, BOARD_TOP);
+buildBoardRow(els.boardBottom, BOARD_BOTTOM);
 
-// ==========================================================
-// CONNECTION UI
-// ==========================================================
+// ---------------------------------------------------------------------------
+// Connect / disconnect
+// ---------------------------------------------------------------------------
+
+els.connectBtn.addEventListener('click', async () => {
+  els.connectBtn.disabled = true;
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: Number(els.baudRate.value) });
+
+    userInitiatedDisconnect = false;
+    setConnected(true);
+    logSystem('Connected at ' + els.baudRate.value + ' baud.');
+
+    writer = port.writable.getWriter();
+    keepReading = true;
+    readLoopPromise = readLoop();
+  } catch (err) {
+    setConnected(false);
+    if (err.name !== 'NotFoundError') {
+      logSystem('Connection failed: ' + err.message);
+    }
+  }
+});
+
+els.disconnectBtn.addEventListener('click', async () => {
+  userInitiatedDisconnect = true;
+  await teardown('Disconnected.');
+});
+
+// Catches a physical unplug even if nothing in our own read/write path errors first.
+if ('serial' in navigator) {
+  navigator.serial.addEventListener('disconnect', (e) => {
+    if (port && e.target === port) {
+      userInitiatedDisconnect = true; // nothing left to gracefully close on our end
+      teardown('Device unplugged.');
+    }
+  });
+}
+
+async function teardown(reason) {
+  keepReading = false;
+  try { if (reader) await reader.cancel(); } catch (_) {}
+  if (readLoopPromise) await readLoopPromise.catch(() => {});
+  try { if (writer) writer.releaseLock(); } catch (_) {}
+  writer = null;
+  try { if (port) await port.close(); } catch (_) {}
+  port = null;
+  setConnected(false);
+  if (reason) logSystem(reason);
+}
 
 function setConnected(isConnected) {
-
-  els.connDot.classList.toggle(
-    'is-live',
-    isConnected
-  );
-
-
-  els.connLabel.textContent =
-    isConnected
-      ? 'Connected'
-      : 'Not connected';
-
-
-  els.connectBtn.disabled =
-    isConnected;
-
-
-  els.disconnectBtn.disabled =
-    !isConnected;
-
-
-  els.baudRate.disabled =
-    isConnected;
-
-
-  /*
-   * The real PWR LED is connected to the board's
-   * power rail and cannot be read through Serial.
-   *
-   * Therefore the connection is used as the UI proxy.
-   */
-
-  els.powerLed.classList.toggle(
-    'is-on',
-    isConnected
-  );
-
-
-  if (!isConnected) {
-
-    els.statusLed.classList.remove(
-      'is-on'
-    );
-
+  els.connDot.classList.toggle('is-live', isConnected);
+  els.connLabel.textContent = isConnected ? 'Connected' : 'Not connected';
+  els.connectBtn.disabled = isConnected;
+  els.disconnectBtn.disabled = !isConnected;
+  els.baudRate.disabled = isConnected;
+  els.linkLed.classList.toggle('is-on', isConnected);
+  if (!isConnected) els.statusLed.classList.remove('is-on');
+  for (const pad of powerPinEls) {
+    pad.parentElement.classList.toggle('is-powered', isConnected);
   }
-
 }
 
-
-// ==========================================================
-// SERIAL READING
-// ==========================================================
+// ---------------------------------------------------------------------------
+// Reading
+// ---------------------------------------------------------------------------
 
 async function readLoop() {
-
-  const textDecoder =
-    new TextDecoderStream();
-
-
-  const readableClosed =
-    port.readable.pipeTo(
-      textDecoder.writable
-    );
-
-
-  reader =
-    textDecoder.readable.getReader();
-
+  const textDecoder = new TextDecoderStream();
+  const readableClosed = port.readable.pipeTo(textDecoder.writable);
+  reader = textDecoder.readable.getReader();
 
   try {
-
     while (keepReading) {
-
-      const {
-        value,
-        done
-      } =
-        await reader.read();
-
-
-      if (done) {
-        break;
-      }
-
-
-      if (value) {
-
-        handleIncoming(value);
-
-      }
-
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value) handleIncoming(value);
     }
-
+  } catch (err) {
+    // Read errors usually mean the device went away mid-session.
+    if (!userInitiatedDisconnect) {
+      queueMicrotask(() => teardown('Device disconnected unexpectedly.'));
+    }
+  } finally {
+    try { reader.releaseLock(); } catch (_) {}
+    await readableClosed.catch(() => {});
   }
-
-  catch (err) {
-
-    logSystem(
-      'Read error: ' +
-      err.message
-    );
-
-  }
-
-  finally {
-
-    reader.releaseLock();
-
-    await readableClosed
-      .catch(() => {});
-
-  }
-
 }
-
-
-// ==========================================================
-// SPLIT SERIAL STREAM INTO LINES
-// ==========================================================
 
 function handleIncoming(chunk) {
-
   lineBuffer += chunk;
-
-
-  const lines =
-    lineBuffer.split(/\r?\n/);
-
-
-  lineBuffer =
-    lines.pop();
-
-
+  const lines = lineBuffer.split(/\r?\n/);
+  lineBuffer = lines.pop();
   for (const line of lines) {
-
-    if (line.length === 0) {
-      continue;
-    }
-
-
+    if (line.length === 0) continue;
     processLine(line);
-
   }
-
 }
-
-
-// ==========================================================
-// PROCESS ONE SERIAL LINE
-// ==========================================================
 
 function processLine(line) {
+  const start = line.indexOf(PR_OPEN);
+  const end = line.indexOf(PR_CLOSE);
 
-  const start =
-    line.indexOf(PR_OPEN);
-
-
-  const end =
-    line.indexOf(PR_CLOSE);
-
-
-  if (
-    start !== -1 &&
-    end !== -1 &&
-    end > start
-  ) {
-
-    const jsonText =
-      line.slice(
-        start + PR_OPEN.length,
-        end
-      );
-
-
+  if (start !== -1 && end !== -1 && end > start) {
+    const jsonText = line.slice(start + PR_OPEN.length, end);
     try {
-
-      const report =
-        JSON.parse(jsonText);
-
-
+      const report = JSON.parse(jsonText);
       updateDashboard(report);
-
-
-      if (!els.hideTelemetry.checked) {
-
-        logLine(
-          line,
-          'telemetry'
-        );
-
-      }
-
-
+      if (!els.hideTelemetry.checked) logLine(line, 'telemetry');
       return;
-
+    } catch (err) {
+      // fall through, print as-is
     }
-
-    catch (err) {
-
-      // Invalid telemetry.
-      // Show it normally in console.
-
-    }
-
   }
 
-
-  logLine(
-    line,
-    'received'
-  );
-
+  logLine(line, 'received');
 }
 
-
-// ==========================================================
-// DASHBOARD UPDATE
-// ==========================================================
+// ---------------------------------------------------------------------------
+// Dashboard
+// ---------------------------------------------------------------------------
 
 function updateDashboard(report) {
-
-  if (
-    !report.pins ||
-    !Array.isArray(report.pins)
-  ) {
-
-    return;
-
-  }
-
-
-  const now =
-    Date.now();
-
-
+  if (!report.pins || !Array.isArray(report.pins)) return;
+  const now = Date.now();
   let matchedCount = 0;
 
-
   for (const p of report.pins) {
+    lastSeen.set(p.pin, now);
+    recordHistory(p, now);
+    pinMeta.set(p.pin, { label: p.label, type: p.type });
 
-    recordHistory(
-      p,
-      now
-    );
-
-
-    // Store complete current metadata.
-
-    pinMeta.set(
-      p.pin,
-      {
-        label: p.label,
-        type: p.type,
-        value: p.val
-      }
-    );
-
-
-    // Update the D2 status LED.
-
-    if (
-      p.pin === STATUS_LED_PIN
-    ) {
-
-      els.statusLed.classList.toggle(
-        'is-on',
-        p.val === 1
-      );
-
+    if (p.pin === STATUS_LED_PIN) {
+      els.statusLed.classList.toggle('is-on', p.val === 1);
     }
 
-
-    // Look for the pin on the physical board.
-
-    const slot =
-      boardSlots.get(p.pin);
-
-
+    const slot = boardSlots.get(p.pin);
     if (slot) {
-
       matchedCount++;
-
-
-      renderSlotValue(
-        slot,
-        p
-      );
-
+      renderSlotValue(slot, p);
+    } else {
+      renderFallbackCard(p, now);
     }
-
-    else {
-
-      renderFallbackCard(
-        p
-      );
-
-    }
-
   }
 
+  els.pinCount.textContent = matchedCount + ' on diagram · ' + fallbackCards.size +
+    ' other · ' + new Date().toLocaleTimeString();
 
-  els.pinCount.textContent =
-    matchedCount +
-    ' on diagram · ' +
-    fallbackCards.size +
-    ' other · ' +
-    new Date().toLocaleTimeString();
-
-
-  if (selectedPin !== null) {
-
-    renderGraph();
-
-  }
-
+  if (selectedPin !== null) renderGraph();
 }
-
-
-// ==========================================================
-// HISTORY
-// ==========================================================
 
 function recordHistory(p, now) {
-
-  let hist =
-    pinHistory.get(p.pin);
-
-
+  let hist = pinHistory.get(p.pin);
   if (!hist) {
-
     hist = [];
-
-    pinHistory.set(
-      p.pin,
-      hist
-    );
-
+    pinHistory.set(p.pin, hist);
   }
-
-
-  hist.push({
-    t: now,
-    val: p.val
-  });
-
-
-  if (
-    hist.length >
-    HISTORY_LIMIT
-  ) {
-
-    hist.shift();
-
-  }
-
+  hist.push({ t: now, val: p.val });
+  if (hist.length > HISTORY_LIMIT) hist.shift();
 }
-
-
-// ==========================================================
-// RENDER BOARD PIN
-// ==========================================================
 
 function renderSlotValue(slot, p) {
-
-  slot.valueEl.textContent =
-    p.val;
-
-
-  const isHigh =
-    p.type === 'd'
-      ? p.val === 1
-      : p.val > 0;
-
-
-  slot.rowEl.classList.toggle(
-    'board-pin--live',
-    isHigh
-  );
-
-
-  slot.rowEl.classList.toggle(
-    'board-pin--low',
-    !isHigh
-  );
-
-
-  // Make the information icon cyan once
-  // telemetry has been received.
-
-  if (slot.infoEl) {
-
-    slot.infoEl.classList.add(
-      'has-data'
-    );
-
-  }
-
+  slot.valueEl.textContent = p.val;
+  slot.rowEl.classList.remove('board-pin--stale');
+  const isHigh = p.type === 'd' ? p.val === 1 : p.val > 0;
+  slot.rowEl.classList.toggle('board-pin--live', isHigh);
+  slot.rowEl.classList.toggle('board-pin--low', !isHigh);
 }
 
-
-// ==========================================================
-// FALLBACK CARD
-// ==========================================================
-
-function renderFallbackCard(p) {
-
-  let card =
-    fallbackCards.get(p.pin);
-
-
+function renderFallbackCard(p, now) {
+  let card = fallbackCards.get(p.pin);
   if (!card) {
+    if (fallbackCards.size === 0) els.pinGrid.innerHTML = '';
+    const el = document.createElement('div');
+    el.className = 'pin-card';
 
-    if (
-      fallbackCards.size === 0
-    ) {
-
-      els.pinGrid.innerHTML = '';
-
-    }
-
-
-    const el =
-      document.createElement('div');
-
-
-    el.className =
-      'pin-card';
-
-
+    const flagText = pinFlagInfo(p.pin);
     el.innerHTML = `
-
-      <div class="pin-card__label">
-        ${escapeHtml(
-          p.label ||
-          ('GPIO ' + p.pin)
-        )}
-      </div>
-
-      <div class="pin-card__gpio">
-        GPIO${p.pin} ·
-        ${typeName(p.type)}
-      </div>
-
-      <div class="pin-card__value">
-        –
-      </div>
-
+      <div class="pin-card__label">${escapeHtml(p.label || ('GPIO ' + p.pin))}${flagText ? ' <span class="pin-flag pin-flag--inline" title="' + escapeHtml(flagText) + '">i</span>' : ''}</div>
+      <div class="pin-card__gpio">GPIO${p.pin} · ${typeName(p.type)}</div>
+      <div class="pin-card__value">–</div>
     `;
-
-
-    el.addEventListener(
-      'click',
-      () => selectPin(p.pin)
-    );
-
-
-    card = {
-
-      el,
-
-      valueEl:
-        el.querySelector(
-          '.pin-card__value'
-        )
-
-    };
-
-
-    fallbackCards.set(
-      p.pin,
-      card
-    );
-
-
-    els.pinGrid.appendChild(
-      el
-    );
-
+    el.addEventListener('click', () => selectPin(p.pin));
+    card = { el, valueEl: el.querySelector('.pin-card__value') };
+    fallbackCards.set(p.pin, card);
+    els.pinGrid.appendChild(el);
   }
-
-
-  card.valueEl.textContent =
-    p.val;
-
+  card.valueEl.textContent = p.val;
+  card.el.classList.remove('pin-card--stale');
 }
-
-
-// ==========================================================
-// TYPE NAME
-// ==========================================================
 
 function typeName(t) {
-
-  if (t === 'd') {
-    return 'digital';
-  }
-
-  if (t === 'p') {
-    return 'pwm';
-  }
-
-  if (t === 'a') {
-    return 'analog';
-  }
-
+  if (t === 'd') return 'digital';
+  if (t === 'p') return 'pwm';
+  if (t === 'a') return 'analog';
   return t;
-
 }
-
-
-// ==========================================================
-// HTML ESCAPE
-// ==========================================================
 
 function escapeHtml(str) {
-
-  return String(str).replace(
-    /[&<>"']/g,
-    (c) => ({
-
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      '"': '&quot;',
-      "'": '&#39;'
-
-    }[c])
-  );
-
+  return String(str).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
 }
 
+// ---------------------------------------------------------------------------
+// Staleness sweep — dims silent board pins, removes long-silent fallback cards
+// ---------------------------------------------------------------------------
 
-// ==========================================================
-// PIN SELECTION
-// ==========================================================
+setInterval(() => {
+  const now = Date.now();
+
+  for (const [gpio, slot] of boardSlots) {
+    const seen = lastSeen.get(gpio);
+    if (seen && now - seen > STALE_MS) {
+      slot.rowEl.classList.add('board-pin--stale');
+    }
+  }
+
+  for (const [gpio, card] of fallbackCards) {
+    const seen = lastSeen.get(gpio) || 0;
+    if (now - seen > FALLBACK_REMOVE_MS) {
+      card.el.remove();
+      fallbackCards.delete(gpio);
+    } else if (now - seen > STALE_MS) {
+      card.el.classList.add('pin-card--stale');
+    }
+  }
+}, 1000);
+
+// ---------------------------------------------------------------------------
+// Pin selection + graph
+// ---------------------------------------------------------------------------
 
 function selectPin(pin) {
+  selectedPin = pin;
 
-  selectedPin =
-    pin;
-
-
-  for (
-    const [gpio, slot]
-    of boardSlots
-  ) {
-
-    slot.rowEl.classList.toggle(
-      'board-pin--selected',
-      gpio === pin
-    );
-
+  for (const [gpio, slot] of boardSlots) {
+    slot.rowEl.classList.toggle('board-pin--selected', gpio === pin);
   }
-
-
-  for (
-    const [gpio, card]
-    of fallbackCards
-  ) {
-
-    card.el.classList.toggle(
-      'pin-card--selected',
-      gpio === pin
-    );
-
+  for (const [gpio, card] of fallbackCards) {
+    card.el.classList.toggle('pin-card--selected', gpio === pin);
   }
-
 
   renderGraph();
-
 }
-
-
-// ==========================================================
-// GRAPH
-// ==========================================================
 
 function renderGraph() {
+  const hist = pinHistory.get(selectedPin);
+  const meta = pinMeta.get(selectedPin) || {};
+  const label = meta.label || ('GPIO ' + selectedPin);
 
-  const hist =
-    pinHistory.get(
-      selectedPin
-    );
-
-
-  const meta =
-    pinMeta.get(
-      selectedPin
-    ) || {};
-
-
-  const label =
-    meta.label ||
-    ('GPIO ' + selectedPin);
-
-
-  if (
-    !hist ||
-    hist.length === 0
-  ) {
-
-    els.graphEmpty.hidden =
-      false;
-
-    els.graphSvg.innerHTML =
-      '';
-
-    els.graphMeta.textContent =
-      label +
-      ' · no data yet';
-
+  if (!hist || hist.length === 0) {
+    els.graphEmpty.hidden = false;
+    els.graphSvg.innerHTML = '';
+    els.graphMeta.textContent = label + ' · no data yet';
     return;
-
   }
 
+  els.graphEmpty.hidden = true;
+  const info = TYPE_INFO[meta.type] || TYPE_INFO.d;
+  const now = Date.now();
+  const points = hist.filter((s) => now - s.t <= GRAPH_WINDOW_MS);
+  const usable = points.length >= 2 ? points : hist.slice(-2);
 
-  els.graphEmpty.hidden =
-    true;
+  const W = 480, H = 200, PAD = 8;
+  const t0 = usable[0].t;
+  const tSpan = Math.max(1, (usable[usable.length - 1].t - t0));
 
+  const toXY = (s) => {
+    const x = PAD + ((s.t - t0) / tSpan) * (W - PAD * 2);
+    const y = H - PAD - (s.val / info.max) * (H - PAD * 2);
+    return [x, y];
+  };
 
-  const info =
-    TYPE_INFO[meta.type] ||
-    TYPE_INFO.d;
+  let pathD;
+  if (meta.type === 'd') {
+    // Step trace: hold the previous value until the instant it changes.
+    let [x0, y0] = toXY(usable[0]);
+    pathD = `M ${x0.toFixed(1)} ${y0.toFixed(1)}`;
+    for (let i = 1; i < usable.length; i++) {
+      const [x1, y1] = toXY(usable[i]);
+      pathD += ` L ${x1.toFixed(1)} ${y0.toFixed(1)} L ${x1.toFixed(1)} ${y1.toFixed(1)}`;
+      y0 = y1;
+    }
+  } else {
+    pathD = usable.map((s, i) => {
+      const [x, y] = toXY(s);
+      return (i === 0 ? 'M ' : 'L ') + x.toFixed(1) + ' ' + y.toFixed(1);
+    }).join(' ');
+  }
 
-
-  const now =
-    Date.now();
-
-
-  const points =
-    hist.filter(
-      (s) =>
-        now - s.t <=
-        GRAPH_WINDOW_MS
-    );
-
-
-  const usable =
-    points.length >= 2
-      ? points
-      : hist.slice(-2);
-
-
-  const W = 480;
-
-  const H = 200;
-
-  const PAD = 8;
-
-
-  const t0 =
-    usable[0].t;
-
-
-  const tSpan =
-    Math.max(
-      1,
-      usable[
-        usable.length - 1
-      ].t - t0
-    );
-
-
-  const coords =
-    usable.map(
-      (s) => {
-
-        const x =
-          PAD +
-          ((s.t - t0) /
-            tSpan) *
-          (W - PAD * 2);
-
-
-        const y =
-          H -
-          PAD -
-          (s.val /
-            info.max) *
-          (H - PAD * 2);
-
-
-        return (
-          x.toFixed(1) +
-          ',' +
-          y.toFixed(1)
-        );
-
-      }
-    );
-
-
-  const latest =
-    usable[
-      usable.length - 1
-    ].val;
-
-
-  els.graphMeta.textContent =
-    label +
-    ' · ' +
-    latest +
-    info.unit +
-    ' · last ' +
-    Math.round(
-      Math.min(
-        GRAPH_WINDOW_MS,
-        now - t0
-      ) / 1000
-    ) +
-    's';
-
+  const latest = usable[usable.length - 1].val;
+  els.graphMeta.textContent = label + ' · ' + latest + info.unit + ' · last ' +
+    Math.round(Math.min(GRAPH_WINDOW_MS, now - t0) / 1000) + 's';
 
   els.graphSvg.innerHTML = `
-
-    <line
-      class="graph-axis"
-      x1="${PAD}"
-      y1="${H - PAD}"
-      x2="${W - PAD}"
-      y2="${H - PAD}"
-    />
-
-    <line
-      class="graph-axis"
-      x1="${PAD}"
-      y1="${PAD}"
-      x2="${PAD}"
-      y2="${H - PAD}"
-    />
-
-    <polyline
-      class="graph-line"
-      points="${coords.join(' ')}"
-    />
-
+    <line class="graph-axis" x1="${PAD}" y1="${H - PAD}" x2="${W - PAD}" y2="${H - PAD}" />
+    <line class="graph-axis" x1="${PAD}" y1="${PAD}" x2="${PAD}" y2="${H - PAD}" />
+    <path class="graph-line" d="${pathD}" />
   `;
-
 }
 
-
-// ==========================================================
-// CONSOLE
-// ==========================================================
+// ---------------------------------------------------------------------------
+// Console
+// ---------------------------------------------------------------------------
 
 function logLine(text, kind) {
-
-  const div =
-    document.createElement('div');
-
-
-  div.className =
-    'console__line' +
-    (
-      kind === 'telemetry'
-        ? ' console__line--telemetry'
-        : ''
-    );
-
-
-  div.textContent =
-    text;
-
-
+  const div = document.createElement('div');
+  div.className = 'console__line' + (kind === 'telemetry' ? ' console__line--telemetry' : '');
+  div.textContent = text;
   appendConsole(div);
-
 }
-
 
 function logSystem(text) {
-
-  const div =
-    document.createElement('div');
-
-
-  div.className =
-    'console__line console__line--system';
-
-
-  div.textContent =
-    text;
-
-
+  const div = document.createElement('div');
+  div.className = 'console__line console__line--system';
+  div.textContent = text;
   appendConsole(div);
-
 }
-
 
 function logSent(text) {
-
-  const div =
-    document.createElement('div');
-
-
-  div.className =
-    'console__line console__line--sent';
-
-
-  div.textContent =
-    text;
-
-
+  const div = document.createElement('div');
+  div.className = 'console__line console__line--sent';
+  div.textContent = text;
   appendConsole(div);
-
 }
-
 
 function appendConsole(div) {
-
-  const atBottom =
-    els.console.scrollHeight -
-    els.console.scrollTop -
-    els.console.clientHeight <
-    40;
-
-
-  els.console.appendChild(
-    div
-  );
-
-
-  if (atBottom) {
-
-    els.console.scrollTop =
-      els.console.scrollHeight;
-
-  }
-
+  const atBottom = els.console.scrollHeight - els.console.scrollTop - els.console.clientHeight < 40;
+  els.console.appendChild(div);
+  if (atBottom) els.console.scrollTop = els.console.scrollHeight;
 }
 
+els.clearConsole.addEventListener('click', () => {
+  els.console.innerHTML = '';
+});
 
-// ==========================================================
-// CLEAR CONSOLE
-// ==========================================================
+// ---------------------------------------------------------------------------
+// Sending
+// ---------------------------------------------------------------------------
 
-els.clearConsole.addEventListener(
-  'click',
-  () => {
+els.sendForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const text = els.sendInput.value;
+  if (!text || !writer) return;
 
-    els.console.innerHTML =
-      '';
+  const ending = els.lineEnding.value === '\\n' ? '\n'
+    : els.lineEnding.value === '\\r\\n' ? '\r\n'
+    : '';
+  const bytes = new TextEncoder().encode(text + ending);
 
+  try {
+    await writer.write(bytes);
+    logSent(text);
+    els.sendInput.value = '';
+  } catch (err) {
+    logSystem('Send failed: ' + err.message);
+    if (!userInitiatedDisconnect) teardown('Device disconnected unexpectedly.');
   }
-);
-
-
-// ==========================================================
-// SEND TO ESP32
-// ==========================================================
-
-els.sendForm.addEventListener(
-  'submit',
-  async (e) => {
-
-    e.preventDefault();
-
-
-    const text =
-      els.sendInput.value;
-
-
-    if (
-      !text ||
-      !writer
-    ) {
-
-      return;
-
-    }
-
-
-    const ending =
-      els.lineEnding.value === '\\n'
-        ? '\n'
-        : els.lineEnding.value === '\\r\\n'
-          ? '\r\n'
-          : '';
-
-
-    const bytes =
-      new TextEncoder().encode(
-        text + ending
-      );
-
-
-    try {
-
-      await writer.write(
-        bytes
-      );
-
-
-      logSent(
-        text
-      );
-
-
-      els.sendInput.value =
-        '';
-
-    }
-
-    catch (err) {
-
-      logSystem(
-        'Send failed: ' +
-        err.message
-      );
-
-    }
-
-  }
-);
+});
