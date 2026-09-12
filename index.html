@@ -31,7 +31,7 @@
       </select>
       <button id="connectBtn" class="btn btn--primary">Connect device</button>
       <button id="disconnectBtn" class="btn" disabled>Disconnect</button>
-      <a id="githubLink" class="btn btn--ghost" href="https://enginyears.github.io/esp32-moniter/" target="_blank" rel="noopener">
+      <a class="btn btn--ghost" href="https://enginyears.github.io/esp32-moniter/" target="_blank" rel="noopener">
         <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
         Source
       </a>
@@ -46,72 +46,61 @@
   <section class="panel panel--board">
     <div class="board-wrap">
       <div class="board">
-        <div id="boardTop" class="board__row board__row--top"></div>
 
-        <div class="board__middle">
+        <div id="boardLeft" class="board__col board__col--left"></div>
+
+        <div class="board__stack">
+          <svg class="board__antenna" viewBox="0 0 60 30" fill="none">
+            <path d="M4 28 L4 14 Q4 3 16 3" stroke="currentColor" stroke-width="2"/>
+            <path d="M11 28 L11 16 Q11 8 16 8" stroke="currentColor" stroke-width="2"/>
+            <path d="M18 28 L18 18 Q18 13 16 13" stroke="currentColor" stroke-width="2"/>
+          </svg>
+
           <div class="board__module">
             <div class="board__module-shield"></div>
             <span class="board__module-label">ESP32<br>WROOM-32</span>
-            <svg class="board__antenna" viewBox="0 0 40 40" fill="none">
-              <path d="M2 38 L2 20 Q2 2 20 2" stroke="currentColor" stroke-width="2"/>
-              <path d="M8 38 L8 22 Q8 8 20 8" stroke="currentColor" stroke-width="2"/>
-              <path d="M14 38 L14 24 Q14 14 20 14" stroke="currentColor" stroke-width="2"/>
-            </svg>
           </div>
-          <div class="board__indicators">
+
+          <div class="board__components">
             <div class="indicator">
-              <span class="indicator__dot indicator__dot--link" id="linkLed" title="Reflects whether the serial connection is open — not a real voltage reading. The board's actual power LED is hardwired to 3.3V and can't be read over serial."></span>
+              <span class="indicator__dot indicator__dot--link" id="linkLed" title="Reflects whether the serial connection is open — not a real voltage reading."></span>
               <span class="indicator__label">LINK</span>
             </div>
             <div class="indicator">
-              <span class="indicator__dot indicator__dot--status" id="statusLed" title="Live state of GPIO2 (this board's onboard status LED)"></span>
+              <span class="indicator__dot indicator__dot--status" id="statusLed" title="Live state of GPIO2"></span>
               <span class="indicator__label">D2</span>
             </div>
+            <span class="board__ic" title="Voltage regulator (decorative)">U1</span>
+            <span class="board__resistor" title="Decorative"></span>
+            <span class="board__resistor" title="Decorative"></span>
+            <span class="board__cap" title="Decorative"></span>
           </div>
-          <div class="board__usb">
-            <span>USB</span>
+
+          <div class="board__usb-row">
+            <button type="button" class="board__button" title="EN / Reset button (physical only — not clickable here)">EN</button>
+            <div class="board__usb"><span>USB</span></div>
+            <button type="button" class="board__button" title="BOOT button (physical only — not clickable here)">BOOT</button>
           </div>
         </div>
 
-        <div id="boardBottom" class="board__row board__row--bottom"></div>
+        <div id="boardRight" class="board__col board__col--right"></div>
+
       </div>
 
-      <p class="board__note">
-        Best-effort layout &mdash; not yet confirmed against your exact board (see chat).
-        Click any pin to graph it. <span class="pin-flag pin-flag--inline">i</span> marks a pin
-        with a caveat (input-only, or reserved for internal flash) &mdash; hover it for details.
-        Wrong labels? Edit <code>BOARD_TOP</code> / <code>BOARD_BOTTOM</code> in <code>app.js</code>.
-      </p>
+      <div class="board__legend">
+        <span><span class="legend-icon">⏚</span> GND</span>
+        <span><span class="legend-icon">⚡</span> Power</span>
+        <span><span class="legend-icon">⇄</span> UART</span>
+        <span><span class="legend-icon">∿</span> PWM (live)</span>
+        <span><span class="legend-icon legend-icon--warn">⛔</span> Avoid — internal flash</span>
+      </div>
+
+      <div id="otherSignals" class="board__other" hidden>
+        <span class="board__other-label">Other signals:</span>
+        <span id="otherSignalsList" class="board__other-list"></span>
+      </div>
     </div>
   </section>
-
-  <main class="rack__body">
-
-    <section class="panel panel--other">
-      <div class="panel__head">
-        <h2>Other reported pins</h2>
-        <span id="pinCount" class="panel__meta">waiting for data&hellip;</span>
-      </div>
-      <div id="pinGrid" class="pin-grid">
-        <p class="empty-state">
-          Pins your firmware reports that aren't on the diagram above show up here.
-          Click one to graph it too. Pins silent for 15s are removed automatically.
-        </p>
-      </div>
-    </section>
-
-    <section class="panel panel--graph">
-      <div class="panel__head">
-        <h2>Pin history</h2>
-        <span id="graphMeta" class="panel__meta">click a pin to graph it</span>
-      </div>
-      <div class="graph-wrap">
-        <svg id="graphSvg" viewBox="0 0 480 200" preserveAspectRatio="none"></svg>
-        <p id="graphEmpty" class="empty-state">No pin selected yet.</p>
-      </div>
-    </section>
-
-  </main>
 
   <section class="panel panel--console">
     <div class="panel__head">
@@ -136,8 +125,24 @@
     </form>
   </section>
 
+  <section class="panel panel--graph">
+    <div class="panel__head">
+      <h2>Pin history</h2>
+      <span id="graphMeta" class="panel__meta">click a pin to graph it</span>
+    </div>
+    <div class="graph-wrap">
+      <svg id="graphSvg" viewBox="0 0 520 220" preserveAspectRatio="none"></svg>
+      <p id="graphEmpty" class="empty-state">No pin selected yet.</p>
+    </div>
+  </section>
+
   <footer class="rack__footer">
-    <span>Protocol: firmware emits <code>&lt;PR&gt;{...}&lt;/PR&gt;</code> lines; see <code>firmware/pin_reporter.h</code>.</span>
+    <p class="rack__protocol">Protocol: firmware emits <code>&lt;PR&gt;{...}&lt;/PR&gt;</code> lines; see <code>firmware/pin_reporter.h</code>.</p>
+    <p class="rack__social">
+      <a href="https://www.youtube.com/@enginyears" target="_blank" rel="noopener">YouTube</a>
+      ·
+      <a href="https://www.instagram.com/hri.thik.hu/" target="_blank" rel="noopener">Instagram</a>
+    </p>
   </footer>
 
 </div>

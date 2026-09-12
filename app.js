@@ -3,33 +3,13 @@
 // firmware/pin_reporter.h). Everything else is just shown in the console.
 
 // ---------------------------------------------------------------------------
-// Board layout — best-effort reading of the photographed board's silkscreen.
-// NOT independently confirmed against your exact board (a 30-pin vs 38-pin
-// mismatch was flagged and unresolved as of this version) — verify against
-// your board and edit these arrays if anything is off. Each entry:
-//   { silk: 'label on your board', pin: GPIO number or null, kind?: 'gnd'|'power' }
-// `kind` only applies to null-pin (non-GPIO) entries.
+// Board layout — read directly off a clear photo of the actual board (30-pin
+// ESP32-WROOM-32 DevKit: 15 pins per side, no D9/D10/D11 flash pins broken
+// out, but D16/D17 present as RX2/TX2). If yours differs, edit these arrays.
+// Each entry: { silk, pin: GPIO or null, kind?: 'gnd'|'power', uart?: true }
 // ---------------------------------------------------------------------------
 
-const BOARD_TOP = [
-  { silk: '3V3', pin: null, kind: 'power' },
-  { silk: 'D23', pin: 23 },
-  { silk: 'D22', pin: 22 },
-  { silk: 'TX0', pin: 1 },
-  { silk: 'RX0', pin: 3 },
-  { silk: 'D19', pin: 19 },
-  { silk: 'D18', pin: 18 },
-  { silk: 'D5',  pin: 5 },
-  { silk: 'TX2', pin: 17 },
-  { silk: 'RX2', pin: 16 },
-  { silk: 'D4',  pin: 4 },
-  { silk: 'D2',  pin: 2 },
-  { silk: 'D15', pin: 15 },
-  { silk: 'GND', pin: null, kind: 'gnd' },
-];
-
-const BOARD_BOTTOM = [
-  { silk: 'VIN', pin: null, kind: 'power' },
+const BOARD_LEFT = [
   { silk: 'EN',  pin: null, kind: 'power' },
   { silk: 'VP',  pin: 36 },
   { silk: 'VN',  pin: 39 },
@@ -43,24 +23,36 @@ const BOARD_BOTTOM = [
   { silk: 'D14', pin: 14 },
   { silk: 'D12', pin: 12 },
   { silk: 'D13', pin: 13 },
-  { silk: 'D9',  pin: 9 },
-  { silk: 'D10', pin: 10 },
-  { silk: 'D11', pin: 11 },
   { silk: 'GND', pin: null, kind: 'gnd' },
+  { silk: 'VIN', pin: null, kind: 'power' },
 ];
 
-// The blue status LED on this board is wired to GPIO2. Change if yours differs.
+const BOARD_RIGHT = [
+  { silk: 'D23', pin: 23 },
+  { silk: 'D22', pin: 22 },
+  { silk: 'TX0', pin: 1,  uart: true },
+  { silk: 'RX0', pin: 3,  uart: true },
+  { silk: 'D21', pin: 21 },
+  { silk: 'D19', pin: 19 },
+  { silk: 'D18', pin: 18 },
+  { silk: 'D5',  pin: 5 },
+  { silk: 'TX2', pin: 17, uart: true },
+  { silk: 'RX2', pin: 16, uart: true },
+  { silk: 'D4',  pin: 4 },
+  { silk: 'D2',  pin: 2 },
+  { silk: 'D15', pin: 15 },
+  { silk: 'GND', pin: null, kind: 'gnd' },
+  { silk: '3V3', pin: null, kind: 'power' },
+];
+
 const STATUS_LED_PIN = 2;
-
-// ADC1-only pins with no output driver and no internal pull-up/down.
 const INPUT_ONLY_PINS = new Set([34, 35, 36, 39]);
-// Connected to the module's internal SPI flash on a standard WROOM-32 — don't use as GPIO.
-const FLASH_RESERVED_PINS = new Set([6, 7, 8, 9, 10, 11]);
+const FLASH_RESERVED_PINS = new Set([6, 7, 8, 9, 10, 11]); // not exposed on this board's headers, kept for completeness
 
-const HISTORY_LIMIT = 300;          // samples kept per pin
-const GRAPH_WINDOW_MS = 30000;      // graph window shown
-const STALE_MS = 4000;              // board pin dims after this long with no update
-const FALLBACK_REMOVE_MS = 15000;   // fallback card removed after this long with no update
+const HISTORY_LIMIT = 300;
+const GRAPH_WINDOW_MS = 30000;
+const STALE_MS = 4000;
+const OTHER_REMOVE_MS = 15000;
 
 const els = {
   connectBtn: document.getElementById('connectBtn'),
@@ -69,12 +61,12 @@ const els = {
   connDot: document.getElementById('connDot'),
   connLabel: document.getElementById('connLabel'),
   supportWarning: document.getElementById('supportWarning'),
-  boardTop: document.getElementById('boardTop'),
-  boardBottom: document.getElementById('boardBottom'),
+  boardLeft: document.getElementById('boardLeft'),
+  boardRight: document.getElementById('boardRight'),
   linkLed: document.getElementById('linkLed'),
   statusLed: document.getElementById('statusLed'),
-  pinGrid: document.getElementById('pinGrid'),
-  pinCount: document.getElementById('pinCount'),
+  otherSignals: document.getElementById('otherSignals'),
+  otherSignalsList: document.getElementById('otherSignalsList'),
   console: document.getElementById('console'),
   hideTelemetry: document.getElementById('hideTelemetry'),
   clearConsole: document.getElementById('clearConsole'),
@@ -98,11 +90,11 @@ let userInitiatedDisconnect = false;
 let lineBuffer = '';
 
 const boardSlots = new Map();    // gpio -> { valueEl, padEl, rowEl }
-const fallbackCards = new Map(); // gpio -> card elements
+const otherChips = new Map();    // gpio -> chip element
 const pinHistory = new Map();    // gpio -> [{t, val}]
 const pinMeta = new Map();       // gpio -> { label, type }
 const lastSeen = new Map();      // gpio -> timestamp
-const powerPinEls = [];          // pad elements for 3V3/VIN/EN, lit while connected
+const powerPinEls = [];
 let selectedPin = null;
 
 const TYPE_INFO = {
@@ -110,10 +102,6 @@ const TYPE_INFO = {
   p: { unit: '/255', max: 255 },
   a: { unit: '/4095', max: 4095 },
 };
-
-// ---------------------------------------------------------------------------
-// Feature detection
-// ---------------------------------------------------------------------------
 
 if (!('serial' in navigator)) {
   els.supportWarning.hidden = false;
@@ -126,37 +114,44 @@ if (!('serial' in navigator)) {
 
 function pinFlagInfo(pin) {
   if (INPUT_ONLY_PINS.has(pin)) {
-    return 'Input-only: no output driver, no internal pull-up/down on this pin.';
+    return { icon: 'i', warn: false, text: 'Input-only: no output driver, no internal pull-up/down.' };
   }
   if (FLASH_RESERVED_PINS.has(pin)) {
-    return 'Connected to the module\u2019s internal SPI flash \u2014 avoid using as general GPIO.';
+    return { icon: '\u26D4', warn: true, text: 'Connected to the module\u2019s internal SPI flash \u2014 avoid using as GPIO.' };
   }
   return null;
 }
 
-function buildBoardRow(container, entries) {
+function buildBoardCol(container, entries, side) {
   for (const entry of entries) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'board-pin';
 
-    const value = document.createElement('span');
-    value.className = 'board-pin__value';
+    const silk = document.createElement('span');
+    silk.className = 'board-pin__silk';
+    silk.textContent = entry.silk;
+    if (entry.uart) {
+      const icon = document.createElement('span');
+      icon.className = 'pin-icon pin-icon--uart';
+      icon.textContent = '\u21C4 ';
+      silk.prepend(icon);
+    }
 
     const pad = document.createElement('span');
     pad.className = 'board-pin__pad';
 
-    const silk = document.createElement('span');
-    silk.className = 'board-pin__silk';
-    silk.textContent = entry.silk;
+    const value = document.createElement('span');
+    value.className = 'board-pin__value';
 
-    btn.append(value, pad, silk);
+    if (side === 'left') btn.append(silk, pad, value);
+    else btn.append(value, pad, silk);
 
     if (entry.pin === null) {
       btn.disabled = true;
       if (entry.kind === 'gnd') {
         btn.classList.add('board-pin--gnd');
-        value.textContent = '\u23DA'; // ⏚ ground symbol
+        value.textContent = '\u23DA';
       } else if (entry.kind === 'power') {
         btn.classList.add('board-pin--power');
         value.textContent = '';
@@ -165,15 +160,15 @@ function buildBoardRow(container, entries) {
     } else {
       value.textContent = '\u2013';
       btn.addEventListener('click', () => selectPin(entry.pin));
-      boardSlots.set(entry.pin, { valueEl: value, padEl: pad, rowEl: btn });
+      boardSlots.set(entry.pin, { valueEl: value, padEl: pad, rowEl: btn, type: null });
 
-      const flagText = pinFlagInfo(entry.pin);
-      if (flagText) {
-        const flag = document.createElement('span');
-        flag.className = 'pin-flag';
-        flag.textContent = 'i';
-        flag.title = flagText;
-        btn.appendChild(flag);
+      const flag = pinFlagInfo(entry.pin);
+      if (flag) {
+        const flagEl = document.createElement('span');
+        flagEl.className = 'pin-flag' + (flag.warn ? ' pin-flag--warn' : '');
+        flagEl.textContent = flag.icon;
+        flagEl.title = flag.text;
+        if (side === 'left') btn.append(flagEl); else btn.prepend(flagEl);
       }
     }
 
@@ -181,8 +176,8 @@ function buildBoardRow(container, entries) {
   }
 }
 
-buildBoardRow(els.boardTop, BOARD_TOP);
-buildBoardRow(els.boardBottom, BOARD_BOTTOM);
+buildBoardCol(els.boardLeft, BOARD_LEFT, 'left');
+buildBoardCol(els.boardRight, BOARD_RIGHT, 'right');
 
 // ---------------------------------------------------------------------------
 // Connect / disconnect
@@ -203,9 +198,7 @@ els.connectBtn.addEventListener('click', async () => {
     readLoopPromise = readLoop();
   } catch (err) {
     setConnected(false);
-    if (err.name !== 'NotFoundError') {
-      logSystem('Connection failed: ' + err.message);
-    }
+    if (err.name !== 'NotFoundError') logSystem('Connection failed: ' + err.message);
   }
 });
 
@@ -214,11 +207,10 @@ els.disconnectBtn.addEventListener('click', async () => {
   await teardown('Disconnected.');
 });
 
-// Catches a physical unplug even if nothing in our own read/write path errors first.
 if ('serial' in navigator) {
   navigator.serial.addEventListener('disconnect', (e) => {
     if (port && e.target === port) {
-      userInitiatedDisconnect = true; // nothing left to gracefully close on our end
+      userInitiatedDisconnect = true;
       teardown('Device unplugged.');
     }
   });
@@ -243,10 +235,26 @@ function setConnected(isConnected) {
   els.disconnectBtn.disabled = !isConnected;
   els.baudRate.disabled = isConnected;
   els.linkLed.classList.toggle('is-on', isConnected);
-  if (!isConnected) els.statusLed.classList.remove('is-on');
-  for (const pad of powerPinEls) {
-    pad.parentElement.classList.toggle('is-powered', isConnected);
+
+  if (!isConnected) {
+    els.statusLed.classList.remove('is-on');
+    for (const pad of powerPinEls) pad.parentElement.classList.remove('is-powered');
+    resetLiveValues();
+  } else {
+    for (const pad of powerPinEls) pad.parentElement.classList.add('is-powered');
   }
+}
+
+// Blanks every displayed value on disconnect so nothing stale lingers on screen.
+function resetLiveValues() {
+  for (const slot of boardSlots.values()) {
+    slot.valueEl.textContent = '\u2013';
+    slot.rowEl.classList.remove('board-pin--live', 'board-pin--low', 'board-pin--stale');
+  }
+  otherChips.clear();
+  els.otherSignalsList.innerHTML = '';
+  els.otherSignals.hidden = true;
+  lastSeen.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -265,7 +273,6 @@ async function readLoop() {
       if (value) handleIncoming(value);
     }
   } catch (err) {
-    // Read errors usually mean the device went away mid-session.
     if (!userInitiatedDisconnect) {
       queueMicrotask(() => teardown('Device disconnected unexpectedly.'));
     }
@@ -311,7 +318,6 @@ function processLine(line) {
 function updateDashboard(report) {
   if (!report.pins || !Array.isArray(report.pins)) return;
   const now = Date.now();
-  let matchedCount = 0;
 
   for (const p of report.pins) {
     lastSeen.set(p.pin, now);
@@ -324,93 +330,67 @@ function updateDashboard(report) {
 
     const slot = boardSlots.get(p.pin);
     if (slot) {
-      matchedCount++;
+      slot.type = p.type;
       renderSlotValue(slot, p);
     } else {
-      renderFallbackCard(p, now);
+      renderOtherSignal(p, now);
     }
   }
-
-  els.pinCount.textContent = matchedCount + ' on diagram · ' + fallbackCards.size +
-    ' other · ' + new Date().toLocaleTimeString();
 
   if (selectedPin !== null) renderGraph();
 }
 
 function recordHistory(p, now) {
   let hist = pinHistory.get(p.pin);
-  if (!hist) {
-    hist = [];
-    pinHistory.set(p.pin, hist);
-  }
+  if (!hist) { hist = []; pinHistory.set(p.pin, hist); }
   hist.push({ t: now, val: p.val });
   if (hist.length > HISTORY_LIMIT) hist.shift();
 }
 
 function renderSlotValue(slot, p) {
-  slot.valueEl.textContent = p.val;
+  const prefix = p.type === 'p' ? '\u223F' : ''; // ∿ prefix for live PWM pins
+  slot.valueEl.textContent = prefix + p.val;
   slot.rowEl.classList.remove('board-pin--stale');
   const isHigh = p.type === 'd' ? p.val === 1 : p.val > 0;
   slot.rowEl.classList.toggle('board-pin--live', isHigh);
   slot.rowEl.classList.toggle('board-pin--low', !isHigh);
 }
 
-function renderFallbackCard(p, now) {
-  let card = fallbackCards.get(p.pin);
-  if (!card) {
-    if (fallbackCards.size === 0) els.pinGrid.innerHTML = '';
-    const el = document.createElement('div');
-    el.className = 'pin-card';
-
-    const flagText = pinFlagInfo(p.pin);
-    el.innerHTML = `
-      <div class="pin-card__label">${escapeHtml(p.label || ('GPIO ' + p.pin))}${flagText ? ' <span class="pin-flag pin-flag--inline" title="' + escapeHtml(flagText) + '">i</span>' : ''}</div>
-      <div class="pin-card__gpio">GPIO${p.pin} · ${typeName(p.type)}</div>
-      <div class="pin-card__value">–</div>
-    `;
-    el.addEventListener('click', () => selectPin(p.pin));
-    card = { el, valueEl: el.querySelector('.pin-card__value') };
-    fallbackCards.set(p.pin, card);
-    els.pinGrid.appendChild(el);
+function renderOtherSignal(p, now) {
+  let chip = otherChips.get(p.pin);
+  if (!chip) {
+    chip = document.createElement('span');
+    chip.className = 'board__other-chip';
+    chip.title = 'Click to graph';
+    chip.addEventListener('click', () => selectPin(p.pin));
+    otherChips.set(p.pin, chip);
+    els.otherSignalsList.appendChild(chip);
+    els.otherSignals.hidden = false;
   }
-  card.valueEl.textContent = p.val;
-  card.el.classList.remove('pin-card--stale');
-}
-
-function typeName(t) {
-  if (t === 'd') return 'digital';
-  if (t === 'p') return 'pwm';
-  if (t === 'a') return 'analog';
-  return t;
-}
-
-function escapeHtml(str) {
-  return String(str).replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  }[c]));
+  chip.textContent = (p.label || ('GPIO' + p.pin)) + ': ' + p.val;
 }
 
 // ---------------------------------------------------------------------------
-// Staleness sweep — dims silent board pins, removes long-silent fallback cards
+// Staleness sweep
 // ---------------------------------------------------------------------------
 
 setInterval(() => {
   const now = Date.now();
 
+  for (const slot of boardSlots.values()) {
+    // only dim pins that have actually reported at least once
+  }
   for (const [gpio, slot] of boardSlots) {
     const seen = lastSeen.get(gpio);
-    if (seen && now - seen > STALE_MS) {
-      slot.rowEl.classList.add('board-pin--stale');
-    }
+    if (seen && now - seen > STALE_MS) slot.rowEl.classList.add('board-pin--stale');
   }
 
-  for (const [gpio, card] of fallbackCards) {
+  for (const [gpio, chip] of otherChips) {
     const seen = lastSeen.get(gpio) || 0;
-    if (now - seen > FALLBACK_REMOVE_MS) {
-      card.el.remove();
-      fallbackCards.delete(gpio);
-    } else if (now - seen > STALE_MS) {
-      card.el.classList.add('pin-card--stale');
+    if (now - seen > OTHER_REMOVE_MS) {
+      chip.remove();
+      otherChips.delete(gpio);
+      if (otherChips.size === 0) els.otherSignals.hidden = true;
     }
   }
 }, 1000);
@@ -421,14 +401,9 @@ setInterval(() => {
 
 function selectPin(pin) {
   selectedPin = pin;
-
   for (const [gpio, slot] of boardSlots) {
     slot.rowEl.classList.toggle('board-pin--selected', gpio === pin);
   }
-  for (const [gpio, card] of fallbackCards) {
-    card.el.classList.toggle('pin-card--selected', gpio === pin);
-  }
-
   renderGraph();
 }
 
@@ -450,19 +425,20 @@ function renderGraph() {
   const points = hist.filter((s) => now - s.t <= GRAPH_WINDOW_MS);
   const usable = points.length >= 2 ? points : hist.slice(-2);
 
-  const W = 480, H = 200, PAD = 8;
+  const W = 520, H = 220, PAD_L = 34, PAD_R = 10, PAD_T = 10, PAD_B = 24;
+  const plotW = W - PAD_L - PAD_R, plotH = H - PAD_T - PAD_B;
+
   const t0 = usable[0].t;
-  const tSpan = Math.max(1, (usable[usable.length - 1].t - t0));
+  const tSpan = Math.max(1, usable[usable.length - 1].t - t0);
 
   const toXY = (s) => {
-    const x = PAD + ((s.t - t0) / tSpan) * (W - PAD * 2);
-    const y = H - PAD - (s.val / info.max) * (H - PAD * 2);
+    const x = PAD_L + ((s.t - t0) / tSpan) * plotW;
+    const y = PAD_T + plotH - (s.val / info.max) * plotH;
     return [x, y];
   };
 
   let pathD;
   if (meta.type === 'd') {
-    // Step trace: hold the previous value until the instant it changes.
     let [x0, y0] = toXY(usable[0]);
     pathD = `M ${x0.toFixed(1)} ${y0.toFixed(1)}`;
     for (let i = 1; i < usable.length; i++) {
@@ -478,12 +454,16 @@ function renderGraph() {
   }
 
   const latest = usable[usable.length - 1].val;
-  els.graphMeta.textContent = label + ' · ' + latest + info.unit + ' · last ' +
-    Math.round(Math.min(GRAPH_WINDOW_MS, now - t0) / 1000) + 's';
+  const windowSec = Math.round(Math.min(GRAPH_WINDOW_MS, now - t0) / 1000);
+  els.graphMeta.textContent = label + ' · ' + latest + info.unit + ' · last ' + windowSec + 's';
 
   els.graphSvg.innerHTML = `
-    <line class="graph-axis" x1="${PAD}" y1="${H - PAD}" x2="${W - PAD}" y2="${H - PAD}" />
-    <line class="graph-axis" x1="${PAD}" y1="${PAD}" x2="${PAD}" y2="${H - PAD}" />
+    <line class="graph-axis" x1="${PAD_L}" y1="${PAD_T + plotH}" x2="${PAD_L + plotW}" y2="${PAD_T + plotH}" />
+    <line class="graph-axis" x1="${PAD_L}" y1="${PAD_T}" x2="${PAD_L}" y2="${PAD_T + plotH}" />
+    <text class="graph-tick" x="4" y="${PAD_T + 4}">${info.max}</text>
+    <text class="graph-tick" x="4" y="${PAD_T + plotH}">0</text>
+    <text class="graph-tick" x="${PAD_L}" y="${H - 6}">-${windowSec}s</text>
+    <text class="graph-tick" x="${PAD_L + plotW - 18}" y="${H - 6}">now</text>
     <path class="graph-line" d="${pathD}" />
   `;
 }
@@ -498,30 +478,24 @@ function logLine(text, kind) {
   div.textContent = text;
   appendConsole(div);
 }
-
 function logSystem(text) {
   const div = document.createElement('div');
   div.className = 'console__line console__line--system';
   div.textContent = text;
   appendConsole(div);
 }
-
 function logSent(text) {
   const div = document.createElement('div');
   div.className = 'console__line console__line--sent';
   div.textContent = text;
   appendConsole(div);
 }
-
 function appendConsole(div) {
   const atBottom = els.console.scrollHeight - els.console.scrollTop - els.console.clientHeight < 40;
   els.console.appendChild(div);
   if (atBottom) els.console.scrollTop = els.console.scrollHeight;
 }
-
-els.clearConsole.addEventListener('click', () => {
-  els.console.innerHTML = '';
-});
+els.clearConsole.addEventListener('click', () => { els.console.innerHTML = ''; });
 
 // ---------------------------------------------------------------------------
 // Sending
@@ -532,9 +506,7 @@ els.sendForm.addEventListener('submit', async (e) => {
   const text = els.sendInput.value;
   if (!text || !writer) return;
 
-  const ending = els.lineEnding.value === '\\n' ? '\n'
-    : els.lineEnding.value === '\\r\\n' ? '\r\n'
-    : '';
+  const ending = els.lineEnding.value === '\\n' ? '\n' : els.lineEnding.value === '\\r\\n' ? '\r\n' : '';
   const bytes = new TextEncoder().encode(text + ending);
 
   try {
